@@ -1,10 +1,12 @@
-.PHONY: check test integration-up integration-conformance integration-e2e integration-test integration-rustfs-persistence integration-down clean-local
+.PHONY: check test integration-up integration-conformance integration-e2e integration-test integration-rustfs-persistence integration-down origin-check origin-test origin-e2e-up origin-e2e-test origin-e2e-down clean-local
 
 check:
 	$(MAKE) -C durable check
+	$(MAKE) -C origin check
 
 test:
 	$(MAKE) -C durable test
+	$(MAKE) -C origin test
 
 integration-up:
 	$(MAKE) -C durable integration-up
@@ -24,5 +26,21 @@ integration-rustfs-persistence:
 integration-down:
 	$(MAKE) -C durable integration-down
 
+origin-check:
+	$(MAKE) -C origin check
+
+origin-test:
+	$(MAKE) -C origin test
+
+origin-e2e-up:
+	$(MAKE) -C origin e2e-up
+
+origin-e2e-test:
+	$(MAKE) -C origin e2e-test
+
+origin-e2e-down:
+	$(MAKE) -C origin e2e-down
+
 clean-local:
 	$(MAKE) -C durable clean-local
+	$(MAKE) -C origin clean-local

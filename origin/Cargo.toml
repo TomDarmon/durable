@@ -1,0 +1,21 @@
+[package]
+name = "origin"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["durable contributors"]
+
+[dependencies]
+axum = "0.8"
+s3 = { path = "../durable/crates/s3" }
+substrate = { path = "../durable/crates/substrate" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+walkdir = "2"
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }

@@ -21,7 +21,11 @@ From the repository root:
 - `make integration-test`: run both integration suites.
 - `make integration-rustfs-persistence`: optional local Docker volume smoke test.
 - `make integration-down`: stop local RustFS.
+- `make origin-check`: run Origin formatting, clippy, and tests.
+- `make origin-e2e-up`: start Origin's local RustFS stack.
+- `make origin-e2e-test`: run Origin real-git e2e tests.
+- `make origin-e2e-down`: stop Origin's local RustFS stack.
 - `make clean-local`: remove local RustFS volumes and durable build artifacts.
 
 Normal tests do not require RustFS. RustFS-backed tests are ignored in the normal
-suite and run through `make integration-test`.
+suite and run through `make integration-test` or `make origin-e2e-test`.
