@@ -19,7 +19,7 @@ async fn git_push_survives_server_cache_loss_and_can_be_cloned() -> Result<(), B
     let scope = RepositoryScope::new("tenant", format!("repo-{}", uuid::Uuid::new_v4()), "edek");
 
     let origin = local_rustfs_repository(scope.clone()).await?;
-    origin.materialize_bare_repository(&remote_cache).await?;
+    let materialized = origin.materialize_bare_repository(&remote_cache).await?;
 
     git(temp.path(), ["init", path_str(&client)?])?;
     git(&client, ["config", "user.email", "agent@example.com"])?;
@@ -34,7 +34,9 @@ async fn git_push_survives_server_cache_loss_and_can_be_cloned() -> Result<(), B
     )?;
     git(&client, ["push", "-u", "origin", "main"])?;
 
-    origin.publish_bare_repository(&remote_cache).await?;
+    origin
+        .publish_materialized_bare_repository(&remote_cache, materialized)
+        .await?;
     std::fs::remove_dir_all(&remote_cache)?;
 
     let reopened = local_rustfs_repository(scope).await?;
@@ -65,16 +67,20 @@ async fn second_push_updates_the_durable_repository_root() -> Result<(), Box<dyn
     let scope = RepositoryScope::new("tenant", format!("repo-{}", uuid::Uuid::new_v4()), "edek");
 
     let origin = local_rustfs_repository(scope.clone()).await?;
-    origin.materialize_bare_repository(&remote_cache).await?;
+    let materialized = origin.materialize_bare_repository(&remote_cache).await?;
     create_client_with_initial_commit(temp.path(), &client, path_str(&remote_cache)?)?;
     git(&client, ["push", "-u", "origin", "main"])?;
-    origin.publish_bare_repository(&remote_cache).await?;
+    let materialized = origin
+        .publish_materialized_bare_repository(&remote_cache, materialized)
+        .await?;
 
     std::fs::write(client.join("README.md"), "hello twice\n")?;
     git(&client, ["add", "README.md"])?;
     git(&client, ["commit", "-m", "second"])?;
     git(&client, ["push", "origin", "main"])?;
-    origin.publish_bare_repository(&remote_cache).await?;
+    origin
+        .publish_materialized_bare_repository(&remote_cache, materialized)
+        .await?;
     std::fs::remove_dir_all(&remote_cache)?;
 
     let reopened = local_rustfs_repository(scope).await?;
@@ -124,6 +130,28 @@ async fn smart_http_server_accepts_push_and_serves_clone() -> Result<(), Box<dyn
     );
 
     server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires `make e2e-up`"]
+async fn docker_compose_origin_service_accepts_push_and_serves_clone() -> Result<(), Box<dyn Error>>
+{
+    let temp = tempfile::tempdir()?;
+    let client = temp.path().join("client");
+    let clone = temp.path().join("clone");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let remote_url = format!("http://127.0.0.1:9200/tenant/{repo_name}.git");
+
+    create_client_with_initial_commit(temp.path(), &client, &remote_url)?;
+    git(&client, ["push", "-u", "origin", "main"])?;
+    git(temp.path(), ["clone", &remote_url, path_str(&clone)?])?;
+
+    assert_eq!(
+        std::fs::read_to_string(clone.join("README.md"))?,
+        "hello from origin\n"
+    );
+
     Ok(())
 }
 

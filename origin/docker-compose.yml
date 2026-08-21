@@ -34,5 +34,21 @@ services:
           aws s3 mb "s3://$$RUSTFS_BUCKET" --endpoint-url http://rustfs:9000
         fi
 
+  origin:
+    build:
+      context: ..
+      dockerfile: origin/Dockerfile
+    depends_on:
+      - rustfs
+      - rustfs-init
+    environment:
+      ORIGIN_BIND: 0.0.0.0:9200
+      DURABLE_RUSTFS_ENDPOINT: http://rustfs:9000
+      DURABLE_RUSTFS_BUCKET: ${RUSTFS_BUCKET:-origin-dev}
+      DURABLE_RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-origin}
+      DURABLE_RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-origin-secret}
+    ports:
+      - "9200:9200"
+
 volumes:
   origin-rustfs-data:

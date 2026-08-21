@@ -101,6 +101,12 @@ pub struct OriginRepository<B> {
     root_name: RootName,
 }
 
+/// Local bare repository materialized from one exact durable root revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaterializedRepository {
+    expected: ExpectedRevision,
+}
+
 /// Published state for one Git repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitPublication {
@@ -138,35 +144,66 @@ where
         &self.storage
     }
 
-    /// Captures a bare Git repository and publishes it as the new root state.
+    /// Captures a bare Git repository and publishes it against the latest root.
+    ///
+    /// Prefer `publish_materialized_bare_repository` when publishing a repo
+    /// cache produced by `materialize_bare_repository`; it preserves the base
+    /// revision and rejects stale writers.
     pub async fn publish_bare_repository(&self, bare_repo: impl AsRef<Path>) -> Result<()> {
-        let bare_repo = bare_repo.as_ref();
-        git(bare_repo, ["fsck", "--no-dangling"])?;
-
-        let publication = self.capture_bare_repository(bare_repo).await?;
-        let publication_ref = self.put_publication(&publication).await?;
-        let root_value = serde_json::to_vec(&publication_ref)?;
         let expected = RootRegister::read(self.storage.as_ref(), &self.root_name)
             .await?
             .map_or(ExpectedRevision::Missing, |root| {
                 ExpectedRevision::Exact(root.revision())
             });
+        self.publish_bare_repository_with_expected(bare_repo.as_ref(), expected)
+            .await
+            .map(|_| ())
+    }
+
+    /// Publishes a materialized bare repository against its captured base.
+    pub async fn publish_materialized_bare_repository(
+        &self,
+        bare_repo: impl AsRef<Path>,
+        materialized: MaterializedRepository,
+    ) -> Result<MaterializedRepository> {
+        self.publish_bare_repository_with_expected(bare_repo.as_ref(), materialized.expected)
+            .await
+    }
+
+    async fn publish_bare_repository_with_expected(
+        &self,
+        bare_repo: &Path,
+        expected: ExpectedRevision,
+    ) -> Result<MaterializedRepository> {
+        git(bare_repo, ["fsck", "--no-dangling"])?;
+
+        let publication = self.capture_bare_repository(bare_repo).await?;
+        let publication_ref = self.put_publication(&publication).await?;
+        let root_value = serde_json::to_vec(&publication_ref)?;
 
         match self
             .storage
             .compare_exchange(&self.root_name, expected, root_value)
             .await?
         {
-            PublishOutcome::Applied(_) => Ok(()),
+            PublishOutcome::Applied(root) => Ok(MaterializedRepository {
+                expected: ExpectedRevision::Exact(root.revision()),
+            }),
             PublishOutcome::Conflict { .. } => Err(OriginError::Conflict),
             PublishOutcome::OutcomeUnknown => Err(OriginError::OutcomeUnknown),
         }
     }
 
     /// Materializes the current durable repository state to a local bare repo.
-    pub async fn materialize_bare_repository(&self, bare_repo: impl AsRef<Path>) -> Result<()> {
+    pub async fn materialize_bare_repository(
+        &self,
+        bare_repo: impl AsRef<Path>,
+    ) -> Result<MaterializedRepository> {
         let bare_repo = bare_repo.as_ref();
-        if let Some(publication) = self.current_publication().await? {
+        if let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? {
+            let publication_ref: DurableObjectRef = serde_json::from_slice(root.value())?;
+            let bytes = ImmutableObjects::read(self.storage.as_ref(), &publication_ref).await?;
+            let publication: GitPublication = serde_json::from_slice(&bytes)?;
             materialize_empty_bare_repo(bare_repo)?;
             for file in publication.files {
                 let path = safe_join(bare_repo, &file.path)?;
@@ -177,11 +214,14 @@ where
                 fs::write(path, bytes)?;
             }
             git(bare_repo, ["fsck", "--no-dangling"])?;
+            Ok(MaterializedRepository {
+                expected: ExpectedRevision::Exact(root.revision()),
+            })
         } else {
             materialize_empty_bare_repo(bare_repo)?;
-            self.publish_bare_repository(bare_repo).await?;
+            self.publish_bare_repository_with_expected(bare_repo, ExpectedRevision::Missing)
+                .await
         }
-        Ok(())
     }
 
     /// Reads the currently published repository state.
@@ -353,7 +393,7 @@ async fn git_http_inner(request: GitHttpRequest) -> Result<axum::response::Respo
     let repository = rustfs_repository(scope, request.state.config.clone()).await?;
     let temp = tempfile::tempdir()?;
     let bare_repo = temp.path().join(&request.repo_segment);
-    repository.materialize_bare_repository(&bare_repo).await?;
+    let materialized = repository.materialize_bare_repository(&bare_repo).await?;
 
     let path_info = format!("/{}/{}", request.repo_segment, request.git_path);
     let output = run_git_http_backend(
@@ -365,7 +405,9 @@ async fn git_http_inner(request: GitHttpRequest) -> Result<axum::response::Respo
         request.body,
     )?;
     if path_info.ends_with("/git-receive-pack") {
-        repository.publish_bare_repository(&bare_repo).await?;
+        repository
+            .publish_materialized_bare_repository(&bare_repo, materialized)
+            .await?;
     }
     cgi_to_response(&output)
 }
@@ -611,6 +653,28 @@ mod tests {
 
         assert!(first.current_publication().await.unwrap().is_some());
         assert!(second.current_publication().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_materialized_repository_publish_is_rejected() {
+        let backend = Arc::new(InMemoryBackend::new());
+        let repo = OriginRepository::new(Arc::new(ScopedStorage::new(test_scope("repo"), backend)));
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first.git");
+        let second = temp.path().join("second.git");
+
+        let first_materialized = repo.materialize_bare_repository(&first).await.unwrap();
+        let second_materialized = repo.materialize_bare_repository(&second).await.unwrap();
+
+        let first_result = repo
+            .publish_materialized_bare_repository(&first, first_materialized)
+            .await;
+        assert!(first_result.is_ok());
+
+        let second_result = repo
+            .publish_materialized_bare_repository(&second, second_materialized)
+            .await;
+        assert!(matches!(second_result, Err(OriginError::Conflict)));
     }
 
     fn test_scope(name: &str) -> StorageScope {
