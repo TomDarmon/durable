@@ -7,12 +7,12 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     net::SocketAddr,
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use substrate::{
     compute_object_id, DatasetId, Durability, DurableError, DurableObjectRef, EncryptionDomainId,
@@ -318,7 +318,10 @@ pub fn local_rustfs_config() -> s3::S3BackendConfig {
 
 /// Runs a minimal smart-HTTP Git server on the supplied listener.
 pub async fn serve_http(listener: TcpListener, config: s3::S3BackendConfig) -> Result<()> {
-    let state = Arc::new(HttpState { config });
+    let state = Arc::new(HttpState {
+        config,
+        repositories: Mutex::new(HashMap::new()),
+    });
     let app = axum::Router::new()
         .route(
             "/{tenant}/{repo}/{*git_path}",
@@ -333,9 +336,23 @@ pub async fn serve_http(listener: TcpListener, config: s3::S3BackendConfig) -> R
     .map_err(|error| OriginError::Http(error.to_string()))
 }
 
-#[derive(Clone)]
 struct HttpState {
     config: s3::S3BackendConfig,
+    repositories: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl HttpState {
+    fn repository_lock(&self, tenant: &str, repo: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let key = format!("{tenant}/{repo}");
+        let mut repositories = self
+            .repositories
+            .lock()
+            .expect("repository lock map mutex poisoned");
+        repositories
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
 }
 
 async fn git_http(
@@ -389,6 +406,8 @@ async fn git_http_inner(request: GitHttpRequest) -> Result<axum::response::Respo
         .repo_segment
         .strip_suffix(".git")
         .ok_or_else(|| OriginError::UnsafePath(request.repo_segment.clone()))?;
+    let repo_lock = request.state.repository_lock(&request.tenant, repo_name);
+    let _guard = repo_lock.lock().await;
     let scope = RepositoryScope::new(request.tenant, repo_name, "edek");
     let repository = rustfs_repository(scope, request.state.config.clone()).await?;
     let temp = tempfile::tempdir()?;
