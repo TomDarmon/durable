@@ -8,6 +8,9 @@ as immutable durable objects plus a small durable root. Local bare repositories
 are rebuildable serving caches: real `git push` can write to one, Origin
 publishes the resulting files to durable storage, and a fresh server cache can
 be materialized later for `git clone`/fetch.
+Each published root points at an Origin manifest containing the captured refs,
+Git object catalog metadata, and the durable file objects needed to rebuild the
+serving cache.
 
 ## Commands
 
@@ -32,6 +35,7 @@ The e2e tests are split by layer:
 ## Intended V1 Shape
 
 - Store materialized Git server files as verified immutable durable objects.
+- Publish refs and Git object metadata in an Origin-owned manifest.
 - Publish repository state through durable root compare-and-swap.
 - Use durable scopes to isolate tenants, repositories, and encryption domains.
 - Treat local bare repositories as discardable serving caches.

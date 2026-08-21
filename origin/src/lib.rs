@@ -116,8 +116,34 @@ pub struct GitPublication {
     pub version: u32,
     /// Deterministic digest of captured file paths and durable object IDs.
     pub digest: String,
+    /// Published refs captured from the bare repository.
+    #[serde(default)]
+    pub refs: Vec<GitRefEntry>,
+    /// Git object catalog captured from the bare repository object database.
+    #[serde(default)]
+    pub objects: Vec<GitObjectEntry>,
     /// Files required to reconstruct the bare serving repository.
     pub files: Vec<GitFileEntry>,
+}
+
+/// One Git ref published in the repository manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitRefEntry {
+    /// Full ref name, for example `refs/heads/main`.
+    pub name: String,
+    /// Git object ID targeted by the ref.
+    pub target: String,
+}
+
+/// One Git object published in the repository manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitObjectEntry {
+    /// Git object ID.
+    pub oid: String,
+    /// Git object type, for example `commit`, `tree`, `blob`, or `tag`.
+    pub kind: String,
+    /// Uncompressed object size reported by Git.
+    pub size: u64,
 }
 
 /// One durable file inside the materialized bare Git repository.
@@ -255,6 +281,8 @@ where
     }
 
     async fn capture_bare_repository(&self, bare_repo: &Path) -> Result<GitPublication> {
+        let refs = capture_git_refs(bare_repo)?;
+        let objects = capture_git_objects(bare_repo)?;
         let mut files = Vec::new();
         for entry in WalkDir::new(bare_repo).follow_links(false) {
             let entry = entry.map_err(|error| OriginError::Io(error.into()))?;
@@ -276,9 +304,12 @@ where
             files.push(GitFileEntry { path, object });
         }
         files.sort_by(|left, right| left.path.cmp(&right.path));
+        let digest = publication_digest(&refs, &objects, &files);
         Ok(GitPublication {
             version: 1,
-            digest: publication_digest(&files),
+            digest,
+            refs,
+            objects,
             files,
         })
     }
@@ -671,10 +702,111 @@ fn safe_join(base: &Path, relative: &str) -> Result<PathBuf> {
     Ok(base.join(normalized))
 }
 
-fn publication_digest(files: &[GitFileEntry]) -> String {
+fn capture_git_refs(repo: &Path) -> Result<Vec<GitRefEntry>> {
+    let output = git_output(
+        repo,
+        ["for-each-ref", "--format=%(refname)%00%(objectname)"],
+    )?;
+    let mut refs = Vec::new();
+    for line in output.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (name, target) = line
+            .split_once('\0')
+            .ok_or_else(|| OriginError::Http(format!("invalid git ref line: {line}")))?;
+        if !name.starts_with("refs/") || !is_git_oid(target) {
+            return Err(OriginError::Http(format!("invalid git ref line: {line}")));
+        }
+        refs.push(GitRefEntry {
+            name: name.to_string(),
+            target: target.to_string(),
+        });
+    }
+    refs.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(refs)
+}
+
+fn capture_git_objects(repo: &Path) -> Result<Vec<GitObjectEntry>> {
+    let output = git_output(
+        repo,
+        [
+            "cat-file",
+            "--batch-all-objects",
+            "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+        ],
+    )?;
+    let mut objects = BTreeMap::new();
+    for line in output.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.split(' ');
+        let oid = parts
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid git object line: {line}")))?;
+        let kind = parts
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid git object line: {line}")))?;
+        let size = parts
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid git object line: {line}")))?
+            .parse()
+            .map_err(|error| OriginError::Http(format!("invalid git object size: {error}")))?;
+        if parts.next().is_some() || !is_git_oid(oid) || !is_git_object_kind(kind) {
+            return Err(OriginError::Http(format!(
+                "invalid git object line: {line}"
+            )));
+        }
+        let entry = GitObjectEntry {
+            oid: oid.to_string(),
+            kind: kind.to_string(),
+            size,
+        };
+        if let Some(previous) = objects.insert(entry.oid.clone(), entry.clone()) {
+            if previous != entry {
+                return Err(OriginError::Http(format!(
+                    "conflicting metadata for git object {oid}"
+                )));
+            }
+        }
+    }
+    Ok(objects.into_values().collect())
+}
+
+fn is_git_oid(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_git_object_kind(value: &str) -> bool {
+    matches!(value, "blob" | "commit" | "tag" | "tree")
+}
+
+fn publication_digest(
+    refs: &[GitRefEntry],
+    objects: &[GitObjectEntry],
+    files: &[GitFileEntry],
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"origin.git.publication.digest.v1\0");
+    for git_ref in refs {
+        hasher.update(b"ref\0");
+        hasher.update(git_ref.name.as_bytes());
+        hasher.update([0]);
+        hasher.update(git_ref.target.as_bytes());
+        hasher.update([0]);
+    }
+    for object in objects {
+        hasher.update(b"object\0");
+        hasher.update(object.oid.as_bytes());
+        hasher.update([0]);
+        hasher.update(object.kind.as_bytes());
+        hasher.update([0]);
+        hasher.update(object.size.to_string().as_bytes());
+        hasher.update([0]);
+    }
     for file in files {
+        hasher.update(b"file\0");
         hasher.update(file.path.as_bytes());
         hasher.update([0]);
         hasher.update(file.object.object_id().as_bytes());
@@ -693,7 +825,26 @@ where
     command("git", all_args)
 }
 
+fn git_output<I, S>(repo: &Path, args: I) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut all_args = vec!["-C".to_string(), path_str(repo)?.to_string()];
+    all_args.extend(args.into_iter().map(|arg| arg.as_ref().to_string()));
+    let output = command_output("git", all_args)?;
+    Ok(String::from_utf8_lossy(&output).into_owned())
+}
+
 fn command<I, S>(program: &str, args: I) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    command_output(program, args).map(|_| ())
+}
+
+fn command_output<I, S>(program: &str, args: I) -> Result<Vec<u8>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -704,7 +855,7 @@ where
         .collect::<Vec<_>>();
     let output = Command::new(program).args(&args).output()?;
     if output.status.success() {
-        Ok(())
+        Ok(output.stdout)
     } else {
         Err(OriginError::Git {
             program: program.into(),
@@ -751,6 +902,58 @@ mod tests {
             repo.current_publication().await.unwrap().unwrap().version,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn publication_manifest_records_refs_and_objects() {
+        let backend = Arc::new(InMemoryBackend::new());
+        let repo = OriginRepository::new(Arc::new(ScopedStorage::new(test_scope("repo"), backend)));
+        let temp = tempfile::tempdir().unwrap();
+        let bare = temp.path().join("origin.git");
+        let client = temp.path().join("client");
+
+        let materialized = repo.materialize_bare_repository(&bare).await.unwrap();
+        command("git", ["init", path_str(&client).unwrap()]).unwrap();
+        git(&client, ["config", "user.email", "agent@example.com"]).unwrap();
+        git(&client, ["config", "user.name", "Agent"]).unwrap();
+        fs::write(client.join("README.md"), "hello from manifest\n").unwrap();
+        git(&client, ["add", "README.md"]).unwrap();
+        git(&client, ["commit", "-m", "initial"]).unwrap();
+        git(&client, ["branch", "-M", "main"]).unwrap();
+        git(
+            &client,
+            ["remote", "add", "origin", path_str(&bare).unwrap()],
+        )
+        .unwrap();
+        git(&client, ["push", "-u", "origin", "main"]).unwrap();
+
+        repo.publish_materialized_bare_repository(&bare, materialized)
+            .await
+            .unwrap();
+        let publication = repo.current_publication().await.unwrap().unwrap();
+
+        let main = publication
+            .refs
+            .iter()
+            .find(|git_ref| git_ref.name == "refs/heads/main")
+            .expect("main ref should be recorded");
+        assert!(is_git_oid(&main.target));
+        assert!(publication
+            .objects
+            .iter()
+            .any(|object| object.kind == "commit"));
+        assert!(publication
+            .objects
+            .iter()
+            .any(|object| object.kind == "tree"));
+        assert!(publication
+            .objects
+            .iter()
+            .any(|object| object.kind == "blob"));
+        assert!(publication
+            .files
+            .iter()
+            .any(|file| file.path == "refs/heads/main"));
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 mod support;
 
-use origin::{local_rustfs_config, serve_http};
+use origin::{local_rustfs_config, local_rustfs_repository, serve_http, RepositoryScope};
 use std::error::Error;
 use support::{
     create_client_with_initial_commit, git, git_stdout, http_status, path_str, write_commit_push,
@@ -108,6 +108,27 @@ async fn smart_http_clone_preserves_branches_and_tags() -> Result<(), Box<dyn Er
         git_stdout(&clone, ["show", "origin/feature:feature.txt"])?,
         "feature branch\n"
     );
+    let publication = local_rustfs_repository(RepositoryScope::new("tenant", repo_name, "edek"))
+        .await?
+        .current_publication()
+        .await?
+        .ok_or("repository was not published")?;
+    assert!(publication
+        .refs
+        .iter()
+        .any(|git_ref| git_ref.name == "refs/heads/main"));
+    assert!(publication
+        .refs
+        .iter()
+        .any(|git_ref| git_ref.name == "refs/heads/feature"));
+    assert!(publication
+        .refs
+        .iter()
+        .any(|git_ref| git_ref.name == "refs/tags/v1"));
+    assert!(publication
+        .objects
+        .iter()
+        .any(|object| object.kind == "tag"));
 
     server.abort();
     Ok(())
