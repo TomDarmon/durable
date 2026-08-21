@@ -44,6 +44,7 @@ services:
     environment:
       ORIGIN_BIND: 0.0.0.0:9200
       ORIGIN_CACHE_DIR: /var/lib/origin/cache
+      RUST_LOG: ${ORIGIN_RUST_LOG:-origin=info}
       DURABLE_RUSTFS_ENDPOINT: http://rustfs:9000
       DURABLE_RUSTFS_BUCKET: ${RUSTFS_BUCKET:-origin-dev}
       DURABLE_RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-origin}
@@ -61,6 +62,7 @@ services:
     environment:
       ORIGIN_BIND: 0.0.0.0:9200
       ORIGIN_CACHE_DIR: /var/lib/origin/cache
+      RUST_LOG: ${ORIGIN_RUST_LOG:-origin=info}
       DURABLE_RUSTFS_ENDPOINT: http://rustfs:9000
       DURABLE_RUSTFS_BUCKET: ${RUSTFS_BUCKET:-origin-dev}
       DURABLE_RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-origin}

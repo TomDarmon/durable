@@ -3,8 +3,8 @@
 //! The durable library stays Git-agnostic. This crate owns Git repository
 //! identity, bare-repository materialization, ref publication, and recovery.
 
-use axum::response::IntoResponse;
 use axum::Json;
+use axum::{middleware::Next, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -14,6 +14,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 use substrate::{
     compute_object_id, DatasetId, Durability, DurableError, DurableObjectRef, EncryptionDomainId,
@@ -22,6 +23,7 @@ use substrate::{
 };
 use thiserror::Error;
 use tokio::net::TcpListener;
+use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
 /// Origin result type.
@@ -208,9 +210,15 @@ where
     /// Reads the current catalog.
     pub async fn read(&self) -> Result<RepositoryCatalog> {
         let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? else {
+            debug!("repository catalog is empty");
             return Ok(RepositoryCatalog::default());
         };
-        Ok(serde_json::from_slice(root.value())?)
+        let catalog: RepositoryCatalog = serde_json::from_slice(root.value())?;
+        debug!(
+            repositories = catalog.repositories.len(),
+            "read repository catalog"
+        );
+        Ok(catalog)
     }
 
     /// Registers a repository if it is not already present.
@@ -232,6 +240,7 @@ where
                 .transpose()?
                 .unwrap_or_default();
             if catalog.repositories.contains(&entry) {
+                debug!(tenant, repo, "repository already present in catalog");
                 return Ok(());
             }
             catalog.repositories.push(entry.clone());
@@ -242,11 +251,29 @@ where
                 .compare_exchange(&self.root_name, expected, value)
                 .await?
             {
-                PublishOutcome::Applied(_) => return Ok(()),
-                PublishOutcome::Conflict { .. } => continue,
-                PublishOutcome::OutcomeUnknown => return Err(OriginError::OutcomeUnknown),
+                PublishOutcome::Applied(_) => {
+                    info!(
+                        tenant,
+                        repo,
+                        repositories = catalog.repositories.len(),
+                        "registered repository"
+                    );
+                    return Ok(());
+                }
+                PublishOutcome::Conflict { .. } => {
+                    debug!(tenant, repo, "repository catalog CAS conflict; retrying");
+                    continue;
+                }
+                PublishOutcome::OutcomeUnknown => {
+                    error!(tenant, repo, "repository catalog publish outcome unknown");
+                    return Err(OriginError::OutcomeUnknown);
+                }
             }
         }
+        warn!(
+            tenant,
+            repo, "repository catalog registration retries exhausted"
+        );
         Err(OriginError::Conflict)
     }
 }
@@ -299,6 +326,7 @@ where
         bare_repo: &Path,
         expected: ExpectedRevision,
     ) -> Result<MaterializedRepository> {
+        info!(bare_repo = %bare_repo.display(), "publishing repository");
         git(bare_repo, ["fsck", "--no-dangling"])?;
 
         let publication = self.capture_bare_repository(bare_repo).await?;
@@ -312,12 +340,27 @@ where
         {
             PublishOutcome::Applied(root) => {
                 write_cache_marker(bare_repo, &publication.digest)?;
+                info!(
+                    bare_repo = %bare_repo.display(),
+                    digest = %publication.digest,
+                    refs = publication.refs.len(),
+                    objects = publication.objects.len(),
+                    files = publication.files.len(),
+                    revision = ?root.revision(),
+                    "published repository"
+                );
                 Ok(MaterializedRepository {
                     expected: ExpectedRevision::Exact(root.revision()),
                 })
             }
-            PublishOutcome::Conflict { .. } => Err(OriginError::Conflict),
-            PublishOutcome::OutcomeUnknown => Err(OriginError::OutcomeUnknown),
+            PublishOutcome::Conflict { .. } => {
+                warn!(bare_repo = %bare_repo.display(), "repository publish conflict");
+                Err(OriginError::Conflict)
+            }
+            PublishOutcome::OutcomeUnknown => {
+                error!(bare_repo = %bare_repo.display(), "repository publish outcome unknown");
+                Err(OriginError::OutcomeUnknown)
+            }
         }
     }
 
@@ -328,6 +371,11 @@ where
     ) -> Result<MaterializedRepository> {
         let bare_repo = bare_repo.as_ref();
         if let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? {
+            info!(
+                bare_repo = %bare_repo.display(),
+                revision = ?root.revision(),
+                "materializing repository"
+            );
             let publication = self.load_publication(&root).await?;
             self.write_publication_to_bare_repository(bare_repo, &publication)
                 .await?;
@@ -335,6 +383,10 @@ where
                 expected: ExpectedRevision::Exact(root.revision()),
             })
         } else {
+            info!(
+                bare_repo = %bare_repo.display(),
+                "initializing empty repository"
+            );
             materialize_empty_bare_repo(bare_repo)?;
             self.publish_bare_repository_with_expected(bare_repo, ExpectedRevision::Missing)
                 .await
@@ -352,16 +404,30 @@ where
             if cache_marker_matches(bare_repo, &publication.digest)
                 && git(bare_repo, ["fsck", "--no-dangling"]).is_ok()
             {
+                debug!(
+                    bare_repo = %bare_repo.display(),
+                    digest = %publication.digest,
+                    "using repository cache"
+                );
                 return Ok(MaterializedRepository {
                     expected: ExpectedRevision::Exact(root.revision()),
                 });
             }
+            info!(
+                bare_repo = %bare_repo.display(),
+                digest = %publication.digest,
+                "refreshing repository cache"
+            );
             self.write_publication_to_bare_repository(bare_repo, &publication)
                 .await?;
             Ok(MaterializedRepository {
                 expected: ExpectedRevision::Exact(root.revision()),
             })
         } else {
+            info!(
+                bare_repo = %bare_repo.display(),
+                "initializing empty repository cache"
+            );
             materialize_empty_bare_repo(bare_repo)?;
             self.publish_bare_repository_with_expected(bare_repo, ExpectedRevision::Missing)
                 .await
@@ -401,6 +467,14 @@ where
         }
         files.sort_by(|left, right| left.path.cmp(&right.path));
         let digest = publication_digest(&refs, &objects, &files);
+        debug!(
+            bare_repo = %bare_repo.display(),
+            digest = %digest,
+            refs = refs.len(),
+            objects = objects.len(),
+            files = files.len(),
+            "captured repository publication"
+        );
         Ok(GitPublication {
             version: 1,
             digest,
@@ -533,6 +607,11 @@ async fn serve_http_with_cache_dir_and_guard(
     cache_temp: Option<tempfile::TempDir>,
 ) -> Result<()> {
     fs::create_dir_all(&cache_root)?;
+    info!(
+        address = %listener.local_addr().map_err(|error| OriginError::Http(error.to_string()))?,
+        cache_root = %cache_root.display(),
+        "serving origin http"
+    );
     let state = Arc::new(HttpState {
         cache_root,
         _cache_temp: cache_temp,
@@ -558,6 +637,7 @@ async fn serve_http_with_cache_dir_and_guard(
             "/{tenant}/{repo}/{*git_path}",
             axum::routing::get(git_http).post(git_http),
         )
+        .layer(axum::middleware::from_fn(log_request))
         .with_state(state);
     axum::serve(
         listener,
@@ -569,6 +649,27 @@ async fn serve_http_with_cache_dir_and_guard(
 
 async fn healthz() -> axum::http::StatusCode {
     axum::http::StatusCode::NO_CONTENT
+}
+
+async fn log_request(request: axum::extract::Request, next: Next) -> axum::response::Response {
+    let method = request.method().clone();
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_else(|| request.uri().path().to_string());
+    let started = Instant::now();
+    let response = next.run(request).await;
+    let status = response.status();
+    let elapsed_ms = started.elapsed().as_millis();
+    if status.is_server_error() {
+        error!(%method, %path, %status, elapsed_ms, "http request failed");
+    } else if status.is_client_error() {
+        warn!(%method, %path, %status, elapsed_ms, "http request rejected");
+    } else {
+        info!(%method, %path, %status, elapsed_ms, "http request");
+    }
+    response
 }
 
 #[derive(Debug, Serialize)]
@@ -624,6 +725,10 @@ async fn api_repositories(
     api_result(async move {
         let catalog = rustfs_catalog(state.config.clone()).await?;
         let catalog = catalog.read().await?;
+        info!(
+            repositories = catalog.repositories.len(),
+            "api listed repositories"
+        );
         Ok(Json(ApiRepositories {
             repositories: catalog.repositories,
         }))
@@ -638,7 +743,7 @@ async fn api_refs(
     api_result(async move {
         validate_repository_name(&repo)?;
         let repository = rustfs_repository(
-            RepositoryScope::new(tenant, repo, "edek"),
+            RepositoryScope::new(tenant.clone(), repo.clone(), "edek"),
             state.config.clone(),
         )
         .await?;
@@ -646,6 +751,12 @@ async fn api_refs(
             .current_publication()
             .await?
             .ok_or_else(|| OriginError::Http("repository not found".into()))?;
+        info!(
+            tenant = %tenant,
+            repo = %repo,
+            refs = publication.refs.len(),
+            "api listed refs"
+        );
         Ok(Json(ApiRefs {
             refs: publication.refs,
         }))
@@ -663,6 +774,14 @@ async fn api_tree(
         let path = normalize_browser_path(query.path.as_deref())?;
         let bare_repo = materialize_browser_repository(&state, &tenant, &repo).await?;
         let entries = list_git_tree(&bare_repo, &reference, &path)?;
+        info!(
+            tenant = %tenant,
+            repo = %repo,
+            reference = %reference,
+            path = %path,
+            entries = entries.len(),
+            "api listed tree"
+        );
         Ok(Json(ApiTree {
             reference,
             path,
@@ -682,6 +801,14 @@ async fn api_blob(
         let path = normalize_browser_path(Some(&query.path))?;
         let bare_repo = materialize_browser_repository(&state, &tenant, &repo).await?;
         let content = read_git_blob(&bare_repo, &reference, &path)?;
+        info!(
+            tenant = %tenant,
+            repo = %repo,
+            reference = %reference,
+            path = %path,
+            bytes = content.len(),
+            "api read blob"
+        );
         Ok(Json(ApiBlob {
             reference,
             path,
@@ -801,6 +928,16 @@ async fn git_http_inner(request: GitHttpRequest) -> Result<axum::response::Respo
         .await?;
 
     let path_info = format!("/{}/{}", request.repo_segment, request.git_path);
+    let operation = git_operation(&path_info, &request.query);
+    info!(
+        tenant = %request.tenant,
+        repo = %repo_name,
+        operation,
+        path_info = %path_info,
+        method = %request.method,
+        bytes = request.body.len(),
+        "git http operation started"
+    );
     let output = run_git_http_backend(
         &tenant_root,
         &path_info,
@@ -813,8 +950,21 @@ async fn git_http_inner(request: GitHttpRequest) -> Result<axum::response::Respo
         repository
             .publish_materialized_bare_repository(&bare_repo, materialized)
             .await?;
+        info!(
+            tenant = %request.tenant,
+            repo = %repo_name,
+            "git receive-pack published"
+        );
     }
-    cgi_to_response(&output)
+    let response = cgi_to_response(&output)?;
+    info!(
+        tenant = %request.tenant,
+        repo = %repo_name,
+        operation,
+        status = %response.status(),
+        "git http operation completed"
+    );
+    Ok(response)
 }
 
 fn run_git_http_backend(
@@ -911,6 +1061,16 @@ fn split_cgi_response(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
                 .position(|window| window == b"\n\n")
                 .map(|index| (&bytes[..index], &bytes[index + 2..]))
         })
+}
+
+fn git_operation(path_info: &str, query: &str) -> &'static str {
+    if path_info.ends_with("/git-receive-pack") || query.contains("service=git-receive-pack") {
+        "receive-pack"
+    } else if path_info.ends_with("/git-upload-pack") || query.contains("service=git-upload-pack") {
+        "upload-pack"
+    } else {
+        "metadata"
+    }
 }
 
 fn materialize_empty_bare_repo(path: &Path) -> Result<()> {

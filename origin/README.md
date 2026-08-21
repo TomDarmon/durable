@@ -27,6 +27,28 @@ keep discardable local bare-repository caches under `/var/lib/origin/cache`.
 Each Origin service also exposes `GET /healthz`, returning `204 No Content`
 when the HTTP process is ready to accept Git traffic.
 
+## Logs
+
+Origin logs request timing and repository events with `tracing`. In the compose
+stack, follow the primary server with:
+
+```sh
+docker compose -f origin/docker-compose.yml logs -f origin
+```
+
+Use the alternate service name to watch the second server:
+
+```sh
+docker compose -f origin/docker-compose.yml logs -f origin-alt
+```
+
+The default filter is `origin=info`. For cache-hit and CAS-retry detail, restart
+the stack with:
+
+```sh
+ORIGIN_RUST_LOG=origin=debug make origin-e2e-up
+```
+
 The e2e tests are split by layer:
 
 - `tests/durable_repository_e2e.rs`: durable publication/materialization without HTTP.
