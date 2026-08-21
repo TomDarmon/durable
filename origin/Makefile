@@ -14,7 +14,7 @@ test:
 	cargo test
 
 e2e-up:
-	docker compose up --build -d rustfs rustfs-init origin
+	docker compose up --build -d rustfs rustfs-init origin origin-alt
 
 e2e-test:
 	DURABLE_RUSTFS_ENDPOINT=$(RUSTFS_ENDPOINT) \

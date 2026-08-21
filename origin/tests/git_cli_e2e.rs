@@ -219,6 +219,106 @@ async fn docker_compose_origin_service_rejects_stale_push() -> Result<(), Box<dy
     Ok(())
 }
 
+#[tokio::test]
+#[ignore = "requires `make e2e-up`"]
+async fn docker_compose_origin_services_linearize_conflicting_pushes() -> Result<(), Box<dyn Error>>
+{
+    let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
+    let temp = tempfile::tempdir()?;
+    let primary = temp.path().join("primary");
+    let alternate = temp.path().join("alternate");
+    let primary_clone = temp.path().join("primary-clone");
+    let alternate_clone = temp.path().join("alternate-clone");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let primary_url = format!("http://127.0.0.1:9200/tenant/{repo_name}.git");
+    let alternate_url = format!("http://127.0.0.1:9202/tenant/{repo_name}.git");
+
+    wait_for_remote(&primary_url)?;
+    wait_for_remote(&alternate_url)?;
+
+    create_client_with_initial_commit(temp.path(), &primary, &primary_url)?;
+    git(&primary, ["push", "-u", "origin", "main"])?;
+    git(temp.path(), ["clone", &primary_url, path_str(&alternate)?])?;
+    git(&alternate, ["config", "user.email", "agent@example.com"])?;
+    git(&alternate, ["config", "user.name", "Agent"])?;
+    git(&alternate, ["remote", "set-url", "origin", &alternate_url])?;
+
+    write_commit(&primary, "README.md", "primary winner\n", "primary update")?;
+    write_commit(
+        &alternate,
+        "README.md",
+        "alternate winner\n",
+        "alternate update",
+    )?;
+
+    let primary_push = {
+        let repo = primary.clone();
+        thread::spawn(move || {
+            git_output(&repo, &["push".into(), "origin".into(), "main".into()])
+                .map_err(|error| error.to_string())
+        })
+    };
+    let alternate_push = {
+        let repo = alternate.clone();
+        thread::spawn(move || {
+            git_output(&repo, &["push".into(), "origin".into(), "main".into()])
+                .map_err(|error| error.to_string())
+        })
+    };
+    let primary_output = primary_push
+        .join()
+        .map_err(|_| "primary push thread panicked")?
+        .map_err(|error| format!("primary push failed to run: {error}"))?;
+    let alternate_output = alternate_push
+        .join()
+        .map_err(|_| "alternate push thread panicked")?
+        .map_err(|error| format!("alternate push failed to run: {error}"))?;
+    let primary_succeeded = primary_output.status.success();
+    let alternate_succeeded = alternate_output.status.success();
+
+    assert_ne!(
+        primary_succeeded, alternate_succeeded,
+        "exactly one conflicting push should succeed\nprimary stdout:\n{}\nprimary stderr:\n{}\nalternate stdout:\n{}\nalternate stderr:\n{}",
+        String::from_utf8_lossy(&primary_output.stdout),
+        String::from_utf8_lossy(&primary_output.stderr),
+        String::from_utf8_lossy(&alternate_output.stdout),
+        String::from_utf8_lossy(&alternate_output.stderr)
+    );
+
+    let expected_contents = if primary_succeeded {
+        "primary winner\n"
+    } else {
+        "alternate winner\n"
+    };
+
+    git(
+        temp.path(),
+        ["clone", &primary_url, path_str(&primary_clone)?],
+    )?;
+    git(
+        temp.path(),
+        ["clone", &alternate_url, path_str(&alternate_clone)?],
+    )?;
+    assert_eq!(
+        std::fs::read_to_string(primary_clone.join("README.md"))?,
+        expected_contents
+    );
+    assert_eq!(
+        std::fs::read_to_string(alternate_clone.join("README.md"))?,
+        expected_contents
+    );
+    assert_eq!(
+        git_stdout(&primary_clone, ["rev-list", "--count", "HEAD"])?.trim(),
+        "2"
+    );
+    assert_eq!(
+        git_stdout(&alternate_clone, ["rev-list", "--count", "HEAD"])?.trim(),
+        "2"
+    );
+
+    Ok(())
+}
+
 fn wait_for_remote(remote_url: &str) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
