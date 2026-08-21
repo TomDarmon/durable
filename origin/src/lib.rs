@@ -8,8 +8,9 @@ use axum::{middleware::Next, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
+    io::Write,
     net::SocketAddr,
     path::{Component, Path, PathBuf},
     process::Command,
@@ -18,13 +19,12 @@ use std::{
 };
 use substrate::{
     compute_object_id, DatasetId, Durability, DurableError, DurableObjectRef, EncryptionDomainId,
-    ExpectedRevision, ImmutableObjects, ObjectFormat, PublishOutcome, RawBackend, RootName,
-    RootRegister, RootState, ScopedStorage, StorageScope, TenantId,
+    ExpectedRevision, ImmutableObjects, ObjectFormat, PublishOutcome, RawBackend, RawRanges,
+    RootName, RootRegister, RootState, ScopedStorage, StorageScope, TenantId,
 };
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
-use walkdir::WalkDir;
 
 /// Origin result type.
 pub type Result<T> = std::result::Result<T, OriginError>;
@@ -33,6 +33,10 @@ const CACHE_MARKER_FILE: &str = ".origin-cache-publication";
 const CATALOG_TENANT: &str = "__origin_system";
 const CATALOG_DATASET: &str = "repository-catalog";
 const CATALOG_ENCRYPTION_DOMAIN: &str = "edek";
+const REF_SHARD_SIZE: usize = 64;
+const OBJECT_CATALOG_SHARD_SIZE: usize = 64;
+const PACK_LAYOUT_SHARD_SIZE: usize = 64;
+const RECEIPT_SHARD_SIZE: usize = 64;
 
 /// Origin error taxonomy.
 #[derive(Debug, Error)]
@@ -122,14 +126,56 @@ pub struct GitPublication {
     pub version: u32,
     /// Deterministic digest of captured file paths and durable object IDs.
     pub digest: String,
+    /// Immutable object containing the published refs.
+    #[serde(default)]
+    pub refs_root: Option<DurableObjectRef>,
+    /// Immutable object containing the Git object catalog.
+    #[serde(default)]
+    pub object_catalog_root: Option<DurableObjectRef>,
+    /// Immutable object containing the pack layout.
+    #[serde(default)]
+    pub pack_layout_root: Option<DurableObjectRef>,
+    /// Immutable object containing publication receipts.
+    #[serde(default)]
+    pub receipt_root: Option<DurableObjectRef>,
     /// Published refs captured from the bare repository.
     #[serde(default)]
     pub refs: Vec<GitRefEntry>,
     /// Git object catalog captured from the bare repository object database.
     #[serde(default)]
     pub objects: Vec<GitObjectEntry>,
-    /// Files required to reconstruct the bare serving repository.
-    pub files: Vec<GitFileEntry>,
+    /// Immutable pack layout required to reconstruct and serve the repository.
+    #[serde(default)]
+    pub packs: Vec<GitPackEntry>,
+    /// Durable receipts for published root candidates.
+    #[serde(default)]
+    pub receipts: Vec<GitPushReceipt>,
+}
+
+/// Small durable publication object referenced directly by the repository root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct GitPublicationManifest {
+    version: u32,
+    digest: String,
+    refs_root: DurableObjectRef,
+    object_catalog_root: DurableObjectRef,
+    pack_layout_root: DurableObjectRef,
+    receipt_root: DurableObjectRef,
+}
+
+/// Root object for a sharded immutable collection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct GitShardedCollectionRoot {
+    version: u32,
+    shards: Vec<GitShardEntry>,
+}
+
+/// One shard inside a sharded immutable collection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct GitShardEntry {
+    first_key: String,
+    entries: usize,
+    object: DurableObjectRef,
 }
 
 /// One Git ref published in the repository manifest.
@@ -150,15 +196,62 @@ pub struct GitObjectEntry {
     pub kind: String,
     /// Uncompressed object size reported by Git.
     pub size: u64,
+    /// Published location of this object in the immutable pack layout.
+    #[serde(default)]
+    pub location: GitObjectLocation,
 }
 
-/// One durable file inside the materialized bare Git repository.
+/// Location metadata for one Git object in the current immutable pack layout.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitObjectLocation {
+    /// Index into `GitPublication::packs`.
+    pub pack_index: usize,
+    /// Stable pack name containing this object.
+    #[serde(default)]
+    pub pack_name: String,
+    /// Byte offset of this object inside the pack.
+    #[serde(default)]
+    pub pack_offset: u64,
+    /// Compressed object byte size reported by the pack index.
+    #[serde(default)]
+    pub packed_size: u64,
+}
+
+/// One immutable Git pack plus its index in durable storage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GitFileEntry {
-    /// Relative path inside the bare repository.
-    pub path: String,
-    /// Durable immutable bytes for that path.
-    pub object: DurableObjectRef,
+pub struct GitPackEntry {
+    /// Durable bytes of the `.pack` file.
+    pub pack: DurableObjectRef,
+    /// Durable bytes of the `.idx` file.
+    pub index: DurableObjectRef,
+    /// Git pack checksum/name reported by `git index-pack`.
+    pub name: String,
+    /// Number of cataloged objects assigned to this pack.
+    pub objects: usize,
+}
+
+/// Durable receipt for one published repository candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitPushReceipt {
+    /// Stable receipt identifier derived from the published candidate digest.
+    pub id: String,
+    /// Previous publication digest, if this was not repository genesis.
+    pub previous_digest: Option<String>,
+    /// Published candidate digest.
+    pub next_digest: String,
+    /// Pack indexes introduced by the publication.
+    pub new_pack_indexes: Vec<usize>,
+}
+
+/// Result of resolving an uncertain publication by reading durable state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicationResolution {
+    /// The receipt is present in the authoritative publication history.
+    Applied(GitPushReceipt),
+    /// The repository root advanced, but not to a publication containing this receipt.
+    NotApplied,
+    /// The repository is still absent.
+    RepositoryMissing,
 }
 
 /// Durable catalog of repositories known to this Origin deployment.
@@ -350,7 +443,10 @@ where
         info!(bare_repo = %bare_repo.display(), "publishing repository");
         git(bare_repo, ["fsck", "--no-dangling"])?;
 
-        let publication = self.capture_bare_repository(bare_repo).await?;
+        let previous = self.previous_publication(expected).await?;
+        let publication = self
+            .capture_bare_repository(bare_repo, previous.as_ref())
+            .await?;
         let publication_ref = self.put_publication(&publication).await?;
         let root_value = serde_json::to_vec(&publication_ref)?;
 
@@ -366,7 +462,7 @@ where
                     digest = %publication.digest,
                     refs = publication.refs.len(),
                     objects = publication.objects.len(),
-                    files = publication.files.len(),
+                    packs = publication.packs.len(),
                     revision = ?root.revision(),
                     "published repository"
                 );
@@ -463,52 +559,289 @@ where
         Ok(Some(self.load_publication(&root).await?))
     }
 
-    async fn capture_bare_repository(&self, bare_repo: &Path) -> Result<GitPublication> {
-        let refs = capture_git_refs(bare_repo)?;
-        let objects = capture_git_objects(bare_repo)?;
-        let mut files = Vec::new();
-        for entry in WalkDir::new(bare_repo).follow_links(false) {
-            let entry = entry.map_err(|error| OriginError::Io(error.into()))?;
-            if !entry.file_type().is_file() {
-                continue;
+    /// Reads the exact packed bytes for a cataloged Git object from durable storage.
+    pub async fn read_git_object_pack_range(&self, oid: &str) -> Result<Vec<u8>> {
+        let manifest = self
+            .current_publication_manifest()
+            .await?
+            .ok_or_else(|| OriginError::Http("repository not found".into()))?;
+        let object = self
+            .find_sharded_json_entry(
+                &manifest.object_catalog_root,
+                oid,
+                |object: &GitObjectEntry| object.oid.as_str(),
+            )
+            .await?
+            .ok_or_else(|| OriginError::Http(format!("git object not found: {oid}")))?;
+        let pack = self
+            .find_sharded_json_entry(
+                &manifest.pack_layout_root,
+                &object.location.pack_name,
+                |pack: &GitPackEntry| pack.name.as_str(),
+            )
+            .await?
+            .ok_or_else(|| OriginError::Http(format!("git object has invalid pack: {oid}")))?;
+        let start = object.location.pack_offset;
+        let end = start + object.location.packed_size;
+        Ok(self.storage.read_range(&pack.pack, start..end).await?)
+    }
+
+    /// Resolves whether an uncertain publication receipt became authoritative.
+    pub async fn resolve_publication_receipt(
+        &self,
+        receipt_id: &str,
+    ) -> Result<PublicationResolution> {
+        let Some(manifest) = self.current_publication_manifest().await? else {
+            return Ok(PublicationResolution::RepositoryMissing);
+        };
+        let Some(receipt) = self
+            .find_sharded_json_entry(
+                &manifest.receipt_root,
+                receipt_id,
+                |receipt: &GitPushReceipt| receipt.id.as_str(),
+            )
+            .await?
+        else {
+            return Ok(PublicationResolution::NotApplied);
+        };
+        Ok(PublicationResolution::Applied(receipt))
+    }
+
+    async fn current_publication_manifest(&self) -> Result<Option<GitPublicationManifest>> {
+        let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? else {
+            return Ok(None);
+        };
+        let publication_ref: DurableObjectRef = serde_json::from_slice(root.value())?;
+        let bytes = ImmutableObjects::read(self.storage.as_ref(), &publication_ref).await?;
+        Ok(Some(serde_json::from_slice(&bytes)?))
+    }
+
+    async fn previous_publication(
+        &self,
+        expected: ExpectedRevision,
+    ) -> Result<Option<GitPublication>> {
+        let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? else {
+            return Ok(None);
+        };
+        match expected {
+            ExpectedRevision::Missing => Ok(None),
+            ExpectedRevision::Exact(revision) if root.revision() == revision => {
+                Ok(Some(self.load_publication(&root).await?))
             }
-            let relative = entry
-                .path()
-                .strip_prefix(bare_repo)
-                .map_err(|_| OriginError::UnsafePath(entry.path().display().to_string()))?;
-            let path = normalize_relative_path(relative)?;
-            if !should_persist_git_file(&path) {
-                continue;
-            }
-            let bytes = fs::read(entry.path())?;
-            let object = self
-                .put_custom_object(ObjectFormat::Custom("origin.git.file.v1".into()), &bytes)
-                .await?;
-            files.push(GitFileEntry { path, object });
+            ExpectedRevision::Exact(_) => Ok(None),
         }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-        let digest = publication_digest(&refs, &objects, &files);
+    }
+
+    async fn capture_bare_repository(
+        &self,
+        bare_repo: &Path,
+        previous: Option<&GitPublication>,
+    ) -> Result<GitPublication> {
+        let refs = capture_git_refs(bare_repo)?;
+        let object_metadata = capture_git_objects(bare_repo)?;
+        let previous_objects = previous
+            .map(|publication| {
+                publication
+                    .objects
+                    .iter()
+                    .map(|object| object.oid.as_str())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let missing_oids = object_metadata
+            .iter()
+            .filter(|object| !previous_objects.contains(object.oid.as_str()))
+            .map(|object| object.oid.clone())
+            .collect::<Vec<_>>();
+
+        let mut packs = previous
+            .map(|publication| publication.packs.clone())
+            .unwrap_or_default();
+        let (new_pack_index, new_pack_name, new_locations) = if missing_oids.is_empty() {
+            (None, None, BTreeMap::new())
+        } else {
+            let (pack, locations) = self.pack_git_objects(bare_repo, &missing_oids).await?;
+            let pack_name = pack.name.clone();
+            packs.push(pack);
+            (Some(packs.len() - 1), Some(pack_name), locations)
+        };
+
+        let previous_locations = previous
+            .map(|publication| {
+                publication
+                    .objects
+                    .iter()
+                    .map(|object| (object.oid.as_str(), object.location.clone()))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let objects = object_metadata
+            .into_iter()
+            .map(|mut object| {
+                object.location = previous_locations
+                    .get(object.oid.as_str())
+                    .cloned()
+                    .or_else(|| {
+                        new_pack_index.and_then(|pack_index| {
+                            new_locations.get(object.oid.as_str()).map(
+                                |(pack_offset, packed_size)| GitObjectLocation {
+                                    pack_index,
+                                    pack_name: new_pack_name.clone().unwrap_or_default(),
+                                    pack_offset: *pack_offset,
+                                    packed_size: *packed_size,
+                                },
+                            )
+                        })
+                    })
+                    .unwrap_or_default();
+                object
+            })
+            .collect::<Vec<_>>();
+
+        let digest = publication_digest(&refs, &objects, &packs);
+        let refs_root = self
+            .put_sharded_json_collection("origin.git.refs.v1", &refs, REF_SHARD_SIZE, |git_ref| {
+                git_ref.name.clone()
+            })
+            .await?;
+        let object_catalog_root = self
+            .put_sharded_json_collection(
+                "origin.git.object-catalog.v1",
+                &objects,
+                OBJECT_CATALOG_SHARD_SIZE,
+                |object| object.oid.clone(),
+            )
+            .await?;
+        let pack_layout_root = self
+            .put_sharded_json_collection(
+                "origin.git.pack-layout.v1",
+                &packs,
+                PACK_LAYOUT_SHARD_SIZE,
+                |pack| pack.name.clone(),
+            )
+            .await?;
+        let mut receipts = previous
+            .map(|publication| publication.receipts.clone())
+            .unwrap_or_default();
+        if previous.is_some() || !refs.is_empty() || !packs.is_empty() {
+            receipts.push(GitPushReceipt {
+                id: publication_receipt_id(&digest),
+                previous_digest: previous.map(|publication| publication.digest.clone()),
+                next_digest: digest.clone(),
+                new_pack_indexes: new_pack_index.into_iter().collect(),
+            });
+        }
+        let receipt_root = self
+            .put_sharded_json_collection(
+                "origin.git.receipts.v1",
+                &receipts,
+                RECEIPT_SHARD_SIZE,
+                |receipt| receipt.id.clone(),
+            )
+            .await?;
         debug!(
             bare_repo = %bare_repo.display(),
             digest = %digest,
             refs = refs.len(),
             objects = objects.len(),
-            files = files.len(),
+            packs = packs.len(),
             "captured repository publication"
         );
         Ok(GitPublication {
             version: 1,
             digest,
+            refs_root: Some(refs_root),
+            object_catalog_root: Some(object_catalog_root),
+            pack_layout_root: Some(pack_layout_root),
+            receipt_root: Some(receipt_root),
             refs,
             objects,
-            files,
+            packs,
+            receipts,
         })
+    }
+
+    async fn pack_git_objects(
+        &self,
+        bare_repo: &Path,
+        oids: &[String],
+    ) -> Result<(GitPackEntry, BTreeMap<String, (u64, u64)>)> {
+        let temp = tempfile::tempdir()?;
+        let pack_path = temp.path().join("origin-incremental.pack");
+        let mut input = oids.join("\n");
+        input.push('\n');
+        let pack_bytes = command_output_with_input(
+            "git",
+            [
+                "-C".to_string(),
+                path_str(bare_repo)?.to_string(),
+                "pack-objects".to_string(),
+                "--compression=0".to_string(),
+                "--stdout".to_string(),
+            ],
+            input.as_bytes(),
+        )?;
+        fs::write(&pack_path, &pack_bytes)?;
+        let name = String::from_utf8_lossy(&command_output(
+            "git",
+            ["index-pack", path_str(&pack_path)?],
+        )?)
+        .trim()
+        .to_string();
+        let idx_path = pack_path.with_extension("idx");
+        let locations = pack_index_locations(&idx_path)?;
+        let idx_bytes = fs::read(idx_path)?;
+        let pack = self
+            .put_custom_object(
+                ObjectFormat::Custom("origin.git.pack.v1".into()),
+                &pack_bytes,
+            )
+            .await?;
+        let index = self
+            .put_custom_object(
+                ObjectFormat::Custom("origin.git.pack-index.v1".into()),
+                &idx_bytes,
+            )
+            .await?;
+        Ok((
+            GitPackEntry {
+                pack,
+                index,
+                name,
+                objects: locations.len(),
+            },
+            locations,
+        ))
     }
 
     async fn load_publication(&self, root: &RootState) -> Result<GitPublication> {
         let publication_ref: DurableObjectRef = serde_json::from_slice(root.value())?;
         let bytes = ImmutableObjects::read(self.storage.as_ref(), &publication_ref).await?;
-        Ok(serde_json::from_slice(&bytes)?)
+        let manifest: GitPublicationManifest = serde_json::from_slice(&bytes)?;
+        let refs = self
+            .read_sharded_json_collection(&manifest.refs_root)
+            .await?;
+        let objects = self
+            .read_sharded_json_collection(&manifest.object_catalog_root)
+            .await?;
+        let packs = self
+            .read_sharded_json_collection(&manifest.pack_layout_root)
+            .await?;
+        let receipts = self
+            .read_sharded_json_collection(&manifest.receipt_root)
+            .await?;
+        Ok(GitPublication {
+            version: manifest.version,
+            digest: manifest.digest,
+            refs_root: Some(manifest.refs_root),
+            object_catalog_root: Some(manifest.object_catalog_root),
+            pack_layout_root: Some(manifest.pack_layout_root),
+            receipt_root: Some(manifest.receipt_root),
+            refs,
+            objects,
+            packs,
+            receipts,
+        })
     }
 
     async fn write_publication_to_bare_repository(
@@ -517,26 +850,130 @@ where
         publication: &GitPublication,
     ) -> Result<()> {
         materialize_empty_bare_repo(bare_repo)?;
-        for file in &publication.files {
-            let path = safe_join(bare_repo, &file.path)?;
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let bytes = ImmutableObjects::read(self.storage.as_ref(), &file.object).await?;
-            fs::write(path, bytes)?;
+        let pack_dir = bare_repo.join("objects").join("pack");
+        fs::create_dir_all(&pack_dir)?;
+        for pack in &publication.packs {
+            let pack_path = pack_dir.join(format!("pack-{}.pack", pack.name));
+            let idx_path = pack_dir.join(format!("pack-{}.idx", pack.name));
+            fs::write(
+                pack_path,
+                ImmutableObjects::read(self.storage.as_ref(), &pack.pack).await?,
+            )?;
+            fs::write(
+                idx_path,
+                ImmutableObjects::read(self.storage.as_ref(), &pack.index).await?,
+            )?;
         }
+        write_loose_refs(bare_repo, &publication.refs)?;
         git(bare_repo, ["fsck", "--no-dangling"])?;
         write_cache_marker(bare_repo, &publication.digest)?;
         Ok(())
     }
 
     async fn put_publication(&self, publication: &GitPublication) -> Result<DurableObjectRef> {
-        let bytes = serde_json::to_vec(publication)?;
+        let manifest = GitPublicationManifest {
+            version: publication.version,
+            digest: publication.digest.clone(),
+            refs_root: publication
+                .refs_root
+                .clone()
+                .ok_or_else(|| OriginError::Http("publication missing refs root".into()))?,
+            object_catalog_root: publication.object_catalog_root.clone().ok_or_else(|| {
+                OriginError::Http("publication missing object catalog root".into())
+            })?,
+            pack_layout_root: publication
+                .pack_layout_root
+                .clone()
+                .ok_or_else(|| OriginError::Http("publication missing pack layout root".into()))?,
+            receipt_root: publication
+                .receipt_root
+                .clone()
+                .ok_or_else(|| OriginError::Http("publication missing receipt root".into()))?,
+        };
+        let bytes = serde_json::to_vec(&manifest)?;
         self.put_custom_object(
             ObjectFormat::Custom("origin.git.publication.v1".into()),
             &bytes,
         )
         .await
+    }
+
+    async fn put_json_object<T: Serialize>(
+        &self,
+        format_name: &str,
+        value: &T,
+    ) -> Result<DurableObjectRef> {
+        let bytes = serde_json::to_vec(value)?;
+        self.put_custom_object(ObjectFormat::Custom(format_name.into()), &bytes)
+            .await
+    }
+
+    async fn read_json_object<T>(&self, reference: &DurableObjectRef) -> Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let bytes = ImmutableObjects::read(self.storage.as_ref(), reference).await?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    async fn put_sharded_json_collection<T, F>(
+        &self,
+        format_name: &str,
+        values: &[T],
+        shard_size: usize,
+        key: F,
+    ) -> Result<DurableObjectRef>
+    where
+        T: Serialize,
+        F: Fn(&T) -> String,
+    {
+        let mut shards = Vec::new();
+        for chunk in values.chunks(shard_size.max(1)) {
+            let object = self
+                .put_json_object(&format!("{format_name}.shard"), &chunk)
+                .await?;
+            shards.push(GitShardEntry {
+                first_key: chunk.first().map(&key).unwrap_or_default(),
+                entries: chunk.len(),
+                object,
+            });
+        }
+        let root = GitShardedCollectionRoot { version: 1, shards };
+        self.put_json_object(&format!("{format_name}.root"), &root)
+            .await
+    }
+
+    async fn read_sharded_json_collection<T>(&self, reference: &DurableObjectRef) -> Result<Vec<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let root: GitShardedCollectionRoot = self.read_json_object(reference).await?;
+        let mut values = Vec::new();
+        for shard in root.shards {
+            let mut shard_values = self.read_json_object::<Vec<T>>(&shard.object).await?;
+            values.append(&mut shard_values);
+        }
+        Ok(values)
+    }
+
+    async fn find_sharded_json_entry<T, F>(
+        &self,
+        reference: &DurableObjectRef,
+        key: &str,
+        entry_key: F,
+    ) -> Result<Option<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+        F: Fn(&T) -> &str,
+    {
+        let root: GitShardedCollectionRoot = self.read_json_object(reference).await?;
+        for shard in root.shards {
+            let values = self.read_json_object::<Vec<T>>(&shard.object).await?;
+            if let Some(value) = values.into_iter().find(|value| entry_key(value) == key) {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
     }
 
     async fn put_custom_object(
@@ -1170,14 +1607,6 @@ fn cache_marker_path(bare_repo: &Path) -> PathBuf {
     bare_repo.join(CACHE_MARKER_FILE)
 }
 
-fn should_persist_git_file(path: &str) -> bool {
-    path == "HEAD"
-        || path == "config"
-        || path == "packed-refs"
-        || path.starts_with("objects/")
-        || path.starts_with("refs/")
-}
-
 fn normalize_relative_path(path: &Path) -> Result<String> {
     let mut parts = Vec::new();
     for component in path.components() {
@@ -1430,6 +1859,7 @@ fn capture_git_objects(repo: &Path) -> Result<Vec<GitObjectEntry>> {
             oid: oid.to_string(),
             kind: kind.to_string(),
             size,
+            location: GitObjectLocation::default(),
         };
         if let Some(previous) = objects.insert(entry.oid.clone(), entry.clone()) {
             if previous != entry {
@@ -1440,6 +1870,45 @@ fn capture_git_objects(repo: &Path) -> Result<Vec<GitObjectEntry>> {
         }
     }
     Ok(objects.into_values().collect())
+}
+
+fn pack_index_locations(idx_path: &Path) -> Result<BTreeMap<String, (u64, u64)>> {
+    let output = String::from_utf8_lossy(&command_output(
+        "git",
+        ["verify-pack", "-v", path_str(idx_path)?],
+    )?)
+    .into_owned();
+    let mut locations = BTreeMap::new();
+    for line in output.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(oid) = fields.next() else {
+            continue;
+        };
+        if !is_git_oid(oid) {
+            continue;
+        }
+        let Some(kind) = fields.next() else {
+            continue;
+        };
+        if !is_git_object_kind(kind) {
+            continue;
+        }
+        let _uncompressed_size = fields
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid verify-pack line: {line}")))?;
+        let packed_size = fields
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid verify-pack line: {line}")))?
+            .parse()
+            .map_err(|error| OriginError::Http(format!("invalid packed object size: {error}")))?;
+        let pack_offset = fields
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid verify-pack line: {line}")))?
+            .parse()
+            .map_err(|error| OriginError::Http(format!("invalid packed object offset: {error}")))?;
+        locations.insert(oid.to_string(), (pack_offset, packed_size));
+    }
+    Ok(locations)
 }
 
 fn is_git_oid(value: &str) -> bool {
@@ -1453,7 +1922,7 @@ fn is_git_object_kind(value: &str) -> bool {
 fn publication_digest(
     refs: &[GitRefEntry],
     objects: &[GitObjectEntry],
-    files: &[GitFileEntry],
+    packs: &[GitPackEntry],
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"origin.git.publication.digest.v1\0");
@@ -1472,15 +1941,53 @@ fn publication_digest(
         hasher.update([0]);
         hasher.update(object.size.to_string().as_bytes());
         hasher.update([0]);
-    }
-    for file in files {
-        hasher.update(b"file\0");
-        hasher.update(file.path.as_bytes());
+        hasher.update(object.location.pack_index.to_string().as_bytes());
         hasher.update([0]);
-        hasher.update(file.object.object_id().as_bytes());
+    }
+    for pack in packs {
+        hasher.update(b"pack\0");
+        hasher.update(pack.name.as_bytes());
+        hasher.update([0]);
+        hasher.update(pack.pack.object_id().as_bytes());
+        hasher.update([0]);
+        hasher.update(pack.index.object_id().as_bytes());
+        hasher.update([0]);
+        hasher.update(pack.objects.to_string().as_bytes());
         hasher.update([0]);
     }
     hex(&hasher.finalize())
+}
+
+fn publication_receipt_id(digest: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"origin.git.receipt.v1\0");
+    hasher.update(digest.as_bytes());
+    hex(&hasher.finalize())
+}
+
+fn write_loose_refs(repo: &Path, refs: &[GitRefEntry]) -> Result<()> {
+    let mut head_target = refs
+        .iter()
+        .find(|git_ref| git_ref.name == "refs/heads/main")
+        .or_else(|| {
+            refs.iter()
+                .find(|git_ref| git_ref.name.starts_with("refs/heads/"))
+        })
+        .map(|git_ref| git_ref.name.clone());
+    for git_ref in refs {
+        let path = safe_join(repo, &git_ref.name)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, format!("{}\n", git_ref.target))?;
+        if head_target.is_none() && git_ref.name.starts_with("refs/") {
+            head_target = Some(git_ref.name.clone());
+        }
+    }
+    if let Some(target) = head_target {
+        git(repo, ["symbolic-ref", "HEAD", &target])?;
+    }
+    Ok(())
 }
 
 fn git<I, S>(repo: &Path, args: I) -> Result<()>
@@ -1530,6 +2037,38 @@ where
         .map(|arg| arg.as_ref().to_string())
         .collect::<Vec<_>>();
     let output = Command::new(program).args(&args).output()?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(OriginError::Git {
+            program: program.into(),
+            args,
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
+fn command_output_with_input<I, S>(program: &str, args: I, input: &[u8]) -> Result<Vec<u8>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let args = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_string())
+        .collect::<Vec<_>>();
+    let output = Command::new(program)
+        .args(&args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(input)?;
+            }
+            child.wait_with_output()
+        })?;
     if output.status.success() {
         Ok(output.stdout)
     } else {
@@ -1592,6 +2131,7 @@ mod tests {
         command("git", ["init", path_str(&client).unwrap()]).unwrap();
         git(&client, ["config", "user.email", "agent@example.com"]).unwrap();
         git(&client, ["config", "user.name", "Agent"]).unwrap();
+        git(&client, ["config", "commit.gpgSign", "false"]).unwrap();
         fs::write(client.join("README.md"), "hello from manifest\n").unwrap();
         git(&client, ["add", "README.md"]).unwrap();
         git(&client, ["commit", "-m", "initial"]).unwrap();
@@ -1626,10 +2166,139 @@ mod tests {
             .objects
             .iter()
             .any(|object| object.kind == "blob"));
+        assert!(!publication.packs.is_empty());
         assert!(publication
-            .files
+            .objects
             .iter()
-            .any(|file| file.path == "refs/heads/main"));
+            .all(|object| object.location.pack_index < publication.packs.len()));
+        assert!(publication.objects.iter().all(|object| {
+            object.location.pack_offset < publication.packs[object.location.pack_index].pack.size()
+                && !object.location.pack_name.is_empty()
+                && object.location.packed_size > 0
+        }));
+        let blob = publication
+            .objects
+            .iter()
+            .find(|object| object.kind == "blob")
+            .expect("blob should be cataloged");
+        let packed_bytes = repo.read_git_object_pack_range(&blob.oid).await.unwrap();
+        assert_eq!(packed_bytes.len(), blob.location.packed_size as usize);
+    }
+
+    #[tokio::test]
+    async fn second_publication_appends_pack_for_new_objects_and_materializes() {
+        let backend = Arc::new(InMemoryBackend::new());
+        let repo = OriginRepository::new(Arc::new(ScopedStorage::new(test_scope("repo"), backend)));
+        let temp = tempfile::tempdir().unwrap();
+        let bare = temp.path().join("origin.git");
+        let restored = temp.path().join("restored.git");
+        let clone = temp.path().join("clone");
+        let client = temp.path().join("client");
+
+        let materialized = repo.materialize_bare_repository(&bare).await.unwrap();
+        command("git", ["init", path_str(&client).unwrap()]).unwrap();
+        git(&client, ["config", "user.email", "agent@example.com"]).unwrap();
+        git(&client, ["config", "user.name", "Agent"]).unwrap();
+        git(&client, ["config", "commit.gpgSign", "false"]).unwrap();
+        fs::write(client.join("README.md"), "one\n").unwrap();
+        git(&client, ["add", "README.md"]).unwrap();
+        git(&client, ["commit", "-m", "one"]).unwrap();
+        git(&client, ["branch", "-M", "main"]).unwrap();
+        git(
+            &client,
+            ["remote", "add", "origin", path_str(&bare).unwrap()],
+        )
+        .unwrap();
+        git(&client, ["push", "-u", "origin", "main"]).unwrap();
+
+        let materialized = repo
+            .publish_materialized_bare_repository(&bare, materialized)
+            .await
+            .unwrap();
+        let first = repo.current_publication().await.unwrap().unwrap();
+        assert_eq!(first.packs.len(), 1);
+        assert_eq!(first.receipts.len(), 1);
+        assert!(first.receipts[0].previous_digest.is_some());
+        assert_eq!(first.receipts[0].new_pack_indexes, vec![0]);
+        let first_pack = first.packs[0].pack.object_id();
+
+        fs::write(client.join("README.md"), "two\n").unwrap();
+        git(&client, ["add", "README.md"]).unwrap();
+        git(&client, ["commit", "-m", "two"]).unwrap();
+        git(&client, ["push", "origin", "main"]).unwrap();
+        repo.publish_materialized_bare_repository(&bare, materialized)
+            .await
+            .unwrap();
+
+        let second = repo.current_publication().await.unwrap().unwrap();
+        assert_eq!(second.packs.len(), 2);
+        assert_eq!(second.receipts.len(), 2);
+        assert_eq!(second.receipts[1].previous_digest, Some(first.digest));
+        assert_eq!(second.receipts[1].new_pack_indexes, vec![1]);
+        assert!(matches!(
+            repo.resolve_publication_receipt(&second.receipts[1].id)
+                .await
+                .unwrap(),
+            PublicationResolution::Applied(receipt) if receipt.next_digest == second.digest
+        ));
+        assert_eq!(
+            repo.resolve_publication_receipt("missing-receipt")
+                .await
+                .unwrap(),
+            PublicationResolution::NotApplied
+        );
+        assert_eq!(second.packs[0].pack.object_id(), first_pack);
+        assert!(second.objects.len() > first.objects.len());
+
+        repo.materialize_bare_repository(&restored).await.unwrap();
+        command(
+            "git",
+            [
+                "clone",
+                path_str(&restored).unwrap(),
+                path_str(&clone).unwrap(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(clone.join("README.md")).unwrap(),
+            "two\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn sharded_collection_root_splits_large_catalogs() {
+        let backend = Arc::new(InMemoryBackend::new());
+        let repo = OriginRepository::new(Arc::new(ScopedStorage::new(test_scope("repo"), backend)));
+        let objects = (0..(OBJECT_CATALOG_SHARD_SIZE + 1))
+            .map(|index| GitObjectEntry {
+                oid: format!("{index:040x}"),
+                kind: "blob".into(),
+                size: index as u64,
+                location: GitObjectLocation {
+                    pack_index: 0,
+                    pack_name: "pack".into(),
+                    pack_offset: index as u64,
+                    packed_size: 1,
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let root_ref = repo
+            .put_sharded_json_collection(
+                "origin.git.object-catalog.v1",
+                &objects,
+                OBJECT_CATALOG_SHARD_SIZE,
+                |object| object.oid.clone(),
+            )
+            .await
+            .unwrap();
+        let root: GitShardedCollectionRoot = repo.read_json_object(&root_ref).await.unwrap();
+        let restored: Vec<GitObjectEntry> =
+            repo.read_sharded_json_collection(&root_ref).await.unwrap();
+
+        assert_eq!(root.shards.len(), 2);
+        assert_eq!(restored, objects);
     }
 
     #[tokio::test]

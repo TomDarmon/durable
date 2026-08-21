@@ -3,7 +3,7 @@ RUSTFS_BUCKET ?= origin-dev
 RUSTFS_ACCESS_KEY ?= origin
 RUSTFS_SECRET_KEY ?= origin-secret
 
-.PHONY: check test e2e-up e2e-test e2e-down clean-local
+.PHONY: check test bench-incremental e2e-up e2e-test e2e-down clean-local
 
 check:
 	cargo fmt --all -- --check
@@ -12,6 +12,11 @@ check:
 
 test:
 	cargo test
+
+bench-incremental:
+	ORIGIN_BENCH_BASE_COMMITS=$${ORIGIN_BENCH_BASE_COMMITS:-50} \
+	ORIGIN_BENCH_INCREMENTAL_COMMITS=$${ORIGIN_BENCH_INCREMENTAL_COMMITS:-10} \
+	cargo test --test incremental_publication_benchmark -- --ignored --nocapture
 
 e2e-up:
 	docker compose up --build -d rustfs rustfs-init origin origin-alt origin-ui-api origin-ui

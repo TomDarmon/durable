@@ -245,6 +245,7 @@ pub fn create_client_with_initial_commit(
     git(cwd, ["init", path_str(client)?])?;
     git(client, ["config", "user.email", "agent@example.com"])?;
     git(client, ["config", "user.name", "Agent"])?;
+    git(client, ["config", "commit.gpgSign", "false"])?;
     std::fs::write(client.join("README.md"), "hello from origin\n")?;
     git(client, ["add", "README.md"])?;
     git(client, ["commit", "-m", "initial"])?;
