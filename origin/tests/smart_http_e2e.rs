@@ -1,0 +1,109 @@
+mod support;
+
+use origin::{local_rustfs_config, serve_http};
+use std::error::Error;
+use support::{create_client_with_initial_commit, git, git_stdout, path_str, write_commit_push};
+use tokio::net::TcpListener;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires `make e2e-up`"]
+async fn smart_http_server_accepts_push_and_serves_clone() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let client = temp.path().join("client");
+    let clone = temp.path().join("clone");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let (server, remote_url) = spawn_http_origin(&repo_name).await?;
+
+    create_client_with_initial_commit(temp.path(), &client, &remote_url)?;
+    git(&client, ["push", "-u", "origin", "main"])?;
+    git(temp.path(), ["clone", &remote_url, path_str(&clone)?])?;
+
+    assert_eq!(
+        std::fs::read_to_string(clone.join("README.md"))?,
+        "hello from origin\n"
+    );
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires `make e2e-up`"]
+async fn smart_http_fetch_sees_later_push() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let writer = temp.path().join("writer");
+    let reader = temp.path().join("reader");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let (server, remote_url) = spawn_http_origin(&repo_name).await?;
+
+    create_client_with_initial_commit(temp.path(), &writer, &remote_url)?;
+    git(&writer, ["push", "-u", "origin", "main"])?;
+    git(temp.path(), ["clone", &remote_url, path_str(&reader)?])?;
+
+    write_commit_push(&writer, "README.md", "fetched update\n", "update")?;
+    git(&reader, ["fetch", "origin", "main"])?;
+    git(&reader, ["merge", "--ff-only", "origin/main"])?;
+
+    assert_eq!(
+        std::fs::read_to_string(reader.join("README.md"))?,
+        "fetched update\n"
+    );
+    assert_eq!(
+        git_stdout(&reader, ["rev-list", "--count", "HEAD"])?.trim(),
+        "2"
+    );
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires `make e2e-up`"]
+async fn smart_http_clone_preserves_branches_and_tags() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let client = temp.path().join("client");
+    let clone = temp.path().join("clone");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let (server, remote_url) = spawn_http_origin(&repo_name).await?;
+
+    create_client_with_initial_commit(temp.path(), &client, &remote_url)?;
+    git(&client, ["checkout", "-b", "feature"])?;
+    std::fs::write(client.join("feature.txt"), "feature branch\n")?;
+    git(&client, ["add", "feature.txt"])?;
+    git(&client, ["commit", "-m", "feature"])?;
+    git(
+        &client,
+        ["-c", "tag.gpgSign=false", "tag", "-a", "v1", "-m", "v1"],
+    )?;
+    git(&client, ["push", "origin", "main", "feature", "v1"])?;
+
+    git(temp.path(), ["clone", &remote_url, path_str(&clone)?])?;
+
+    assert_eq!(
+        git_stdout(&clone, ["rev-parse", "--verify", "origin/feature"])?
+            .trim()
+            .len(),
+        40
+    );
+    assert_eq!(git_stdout(&clone, ["tag", "-l", "v1"])?.trim(), "v1");
+    assert_eq!(
+        git_stdout(&clone, ["show", "origin/feature:feature.txt"])?,
+        "feature branch\n"
+    );
+
+    server.abort();
+    Ok(())
+}
+
+async fn spawn_http_origin(
+    repo_name: &str,
+) -> Result<(tokio::task::JoinHandle<()>, String), Box<dyn Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        serve_http(listener, local_rustfs_config())
+            .await
+            .expect("origin http server failed");
+    });
+    Ok((server, format!("http://{address}/tenant/{repo_name}.git")))
+}

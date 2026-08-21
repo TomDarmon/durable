@@ -21,6 +21,12 @@ The compose stack exposes Git HTTP servers at `http://127.0.0.1:9200` and
 `http://127.0.0.1:9202`. Both services share the same RustFS bucket and keep
 discardable local bare-repository caches under `/var/lib/origin/cache`.
 
+The e2e tests are split by layer:
+
+- `tests/durable_repository_e2e.rs`: durable publication/materialization without HTTP.
+- `tests/smart_http_e2e.rs`: in-process smart HTTP behavior with real Git clients.
+- `tests/docker_compose_e2e.rs`: Docker/RustFS service behavior, restarts, cache, and multi-service conflicts.
+
 ## Intended V1 Shape
 
 - Store materialized Git server files as verified immutable durable objects.

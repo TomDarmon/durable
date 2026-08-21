@@ -21,7 +21,17 @@ e2e-test:
 	DURABLE_RUSTFS_BUCKET=$(RUSTFS_BUCKET) \
 	DURABLE_RUSTFS_ACCESS_KEY=$(RUSTFS_ACCESS_KEY) \
 	DURABLE_RUSTFS_SECRET_KEY=$(RUSTFS_SECRET_KEY) \
-	cargo test --test git_cli_e2e -- --ignored --nocapture
+	cargo test --test durable_repository_e2e -- --ignored --nocapture
+	DURABLE_RUSTFS_ENDPOINT=$(RUSTFS_ENDPOINT) \
+	DURABLE_RUSTFS_BUCKET=$(RUSTFS_BUCKET) \
+	DURABLE_RUSTFS_ACCESS_KEY=$(RUSTFS_ACCESS_KEY) \
+	DURABLE_RUSTFS_SECRET_KEY=$(RUSTFS_SECRET_KEY) \
+	cargo test --test smart_http_e2e -- --ignored --nocapture
+	DURABLE_RUSTFS_ENDPOINT=$(RUSTFS_ENDPOINT) \
+	DURABLE_RUSTFS_BUCKET=$(RUSTFS_BUCKET) \
+	DURABLE_RUSTFS_ACCESS_KEY=$(RUSTFS_ACCESS_KEY) \
+	DURABLE_RUSTFS_SECRET_KEY=$(RUSTFS_SECRET_KEY) \
+	cargo test --test docker_compose_e2e -- --ignored --nocapture
 
 e2e-down:
 	docker compose down
