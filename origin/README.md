@@ -17,7 +17,9 @@ be materialized later for `git clone`/fetch.
 - `make e2e-test`: run ignored real-git e2e tests over RustFS.
 - `make e2e-down`: stop the local stack.
 
-The compose stack exposes the Git HTTP server at `http://127.0.0.1:9200`.
+The compose stack exposes Git HTTP servers at `http://127.0.0.1:9200` and
+`http://127.0.0.1:9202`. Both services share the same RustFS bucket and keep
+discardable local bare-repository caches under `/var/lib/origin/cache`.
 
 ## Intended V1 Shape
 

@@ -17,7 +17,7 @@ use std::{
 use substrate::{
     compute_object_id, DatasetId, Durability, DurableError, DurableObjectRef, EncryptionDomainId,
     ExpectedRevision, ImmutableObjects, ObjectFormat, PublishOutcome, RawBackend, RootName,
-    RootRegister, ScopedStorage, StorageScope, TenantId,
+    RootRegister, RootState, ScopedStorage, StorageScope, TenantId,
 };
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -25,6 +25,8 @@ use walkdir::WalkDir;
 
 /// Origin result type.
 pub type Result<T> = std::result::Result<T, OriginError>;
+
+const CACHE_MARKER_FILE: &str = ".origin-cache-publication";
 
 /// Origin error taxonomy.
 #[derive(Debug, Error)]
@@ -186,9 +188,12 @@ where
             .compare_exchange(&self.root_name, expected, root_value)
             .await?
         {
-            PublishOutcome::Applied(root) => Ok(MaterializedRepository {
-                expected: ExpectedRevision::Exact(root.revision()),
-            }),
+            PublishOutcome::Applied(root) => {
+                write_cache_marker(bare_repo, &publication.digest)?;
+                Ok(MaterializedRepository {
+                    expected: ExpectedRevision::Exact(root.revision()),
+                })
+            }
             PublishOutcome::Conflict { .. } => Err(OriginError::Conflict),
             PublishOutcome::OutcomeUnknown => Err(OriginError::OutcomeUnknown),
         }
@@ -201,19 +206,36 @@ where
     ) -> Result<MaterializedRepository> {
         let bare_repo = bare_repo.as_ref();
         if let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? {
-            let publication_ref: DurableObjectRef = serde_json::from_slice(root.value())?;
-            let bytes = ImmutableObjects::read(self.storage.as_ref(), &publication_ref).await?;
-            let publication: GitPublication = serde_json::from_slice(&bytes)?;
+            let publication = self.load_publication(&root).await?;
+            self.write_publication_to_bare_repository(bare_repo, &publication)
+                .await?;
+            Ok(MaterializedRepository {
+                expected: ExpectedRevision::Exact(root.revision()),
+            })
+        } else {
             materialize_empty_bare_repo(bare_repo)?;
-            for file in publication.files {
-                let path = safe_join(bare_repo, &file.path)?;
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let bytes = ImmutableObjects::read(self.storage.as_ref(), &file.object).await?;
-                fs::write(path, bytes)?;
+            self.publish_bare_repository_with_expected(bare_repo, ExpectedRevision::Missing)
+                .await
+        }
+    }
+
+    /// Materializes the current durable state, reusing a verified local cache when it matches.
+    pub async fn materialize_bare_repository_cached(
+        &self,
+        bare_repo: impl AsRef<Path>,
+    ) -> Result<MaterializedRepository> {
+        let bare_repo = bare_repo.as_ref();
+        if let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? {
+            let publication = self.load_publication(&root).await?;
+            if cache_marker_matches(bare_repo, &publication.digest)
+                && git(bare_repo, ["fsck", "--no-dangling"]).is_ok()
+            {
+                return Ok(MaterializedRepository {
+                    expected: ExpectedRevision::Exact(root.revision()),
+                });
             }
-            git(bare_repo, ["fsck", "--no-dangling"])?;
+            self.write_publication_to_bare_repository(bare_repo, &publication)
+                .await?;
             Ok(MaterializedRepository {
                 expected: ExpectedRevision::Exact(root.revision()),
             })
@@ -229,9 +251,7 @@ where
         let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? else {
             return Ok(None);
         };
-        let publication_ref: DurableObjectRef = serde_json::from_slice(root.value())?;
-        let bytes = ImmutableObjects::read(self.storage.as_ref(), &publication_ref).await?;
-        Ok(Some(serde_json::from_slice(&bytes)?))
+        Ok(Some(self.load_publication(&root).await?))
     }
 
     async fn capture_bare_repository(&self, bare_repo: &Path) -> Result<GitPublication> {
@@ -261,6 +281,31 @@ where
             digest: publication_digest(&files),
             files,
         })
+    }
+
+    async fn load_publication(&self, root: &RootState) -> Result<GitPublication> {
+        let publication_ref: DurableObjectRef = serde_json::from_slice(root.value())?;
+        let bytes = ImmutableObjects::read(self.storage.as_ref(), &publication_ref).await?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    async fn write_publication_to_bare_repository(
+        &self,
+        bare_repo: &Path,
+        publication: &GitPublication,
+    ) -> Result<()> {
+        materialize_empty_bare_repo(bare_repo)?;
+        for file in &publication.files {
+            let path = safe_join(bare_repo, &file.path)?;
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let bytes = ImmutableObjects::read(self.storage.as_ref(), &file.object).await?;
+            fs::write(path, bytes)?;
+        }
+        git(bare_repo, ["fsck", "--no-dangling"])?;
+        write_cache_marker(bare_repo, &publication.digest)?;
+        Ok(())
     }
 
     async fn put_publication(&self, publication: &GitPublication) -> Result<DurableObjectRef> {
@@ -318,7 +363,35 @@ pub fn local_rustfs_config() -> s3::S3BackendConfig {
 
 /// Runs a minimal smart-HTTP Git server on the supplied listener.
 pub async fn serve_http(listener: TcpListener, config: s3::S3BackendConfig) -> Result<()> {
+    let cache_temp = tempfile::tempdir()?;
+    serve_http_with_cache_dir_and_guard(
+        listener,
+        config,
+        cache_temp.path().to_path_buf(),
+        Some(cache_temp),
+    )
+    .await
+}
+
+/// Runs a minimal smart-HTTP Git server using a persistent local repository cache.
+pub async fn serve_http_with_cache_dir(
+    listener: TcpListener,
+    config: s3::S3BackendConfig,
+    cache_root: impl Into<PathBuf>,
+) -> Result<()> {
+    serve_http_with_cache_dir_and_guard(listener, config, cache_root.into(), None).await
+}
+
+async fn serve_http_with_cache_dir_and_guard(
+    listener: TcpListener,
+    config: s3::S3BackendConfig,
+    cache_root: PathBuf,
+    cache_temp: Option<tempfile::TempDir>,
+) -> Result<()> {
+    fs::create_dir_all(&cache_root)?;
     let state = Arc::new(HttpState {
+        cache_root,
+        _cache_temp: cache_temp,
         config,
         repositories: Mutex::new(HashMap::new()),
     });
@@ -337,6 +410,8 @@ pub async fn serve_http(listener: TcpListener, config: s3::S3BackendConfig) -> R
 }
 
 struct HttpState {
+    cache_root: PathBuf,
+    _cache_temp: Option<tempfile::TempDir>,
     config: s3::S3BackendConfig,
     repositories: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -408,15 +483,18 @@ async fn git_http_inner(request: GitHttpRequest) -> Result<axum::response::Respo
         .ok_or_else(|| OriginError::UnsafePath(request.repo_segment.clone()))?;
     let repo_lock = request.state.repository_lock(&request.tenant, repo_name);
     let _guard = repo_lock.lock().await;
-    let scope = RepositoryScope::new(request.tenant, repo_name, "edek");
+    let scope = RepositoryScope::new(request.tenant.clone(), repo_name, "edek");
     let repository = rustfs_repository(scope, request.state.config.clone()).await?;
-    let temp = tempfile::tempdir()?;
-    let bare_repo = temp.path().join(&request.repo_segment);
-    let materialized = repository.materialize_bare_repository(&bare_repo).await?;
+    let tenant_root = safe_join(&request.state.cache_root, &request.tenant)?;
+    fs::create_dir_all(&tenant_root)?;
+    let bare_repo = safe_join(&tenant_root, &request.repo_segment)?;
+    let materialized = repository
+        .materialize_bare_repository_cached(&bare_repo)
+        .await?;
 
     let path_info = format!("/{}/{}", request.repo_segment, request.git_path);
     let output = run_git_http_backend(
-        temp.path(),
+        &tenant_root,
         &path_info,
         &request.query,
         request.method,
@@ -535,6 +613,21 @@ fn materialize_empty_bare_repo(path: &Path) -> Result<()> {
     command("git", ["init", "--bare", path_str(path)?])?;
     git(path, ["config", "http.receivepack", "true"])?;
     Ok(())
+}
+
+fn cache_marker_matches(bare_repo: &Path, digest: &str) -> bool {
+    fs::read_to_string(cache_marker_path(bare_repo))
+        .map(|cached| cached.trim() == digest)
+        .unwrap_or(false)
+}
+
+fn write_cache_marker(bare_repo: &Path, digest: &str) -> Result<()> {
+    fs::write(cache_marker_path(bare_repo), format!("{digest}\n"))?;
+    Ok(())
+}
+
+fn cache_marker_path(bare_repo: &Path) -> PathBuf {
+    bare_repo.join(CACHE_MARKER_FILE)
 }
 
 fn should_persist_git_file(path: &str) -> bool {

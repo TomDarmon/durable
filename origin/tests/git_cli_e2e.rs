@@ -154,6 +154,7 @@ async fn docker_compose_origin_service_accepts_push_and_serves_clone() -> Result
         std::fs::read_to_string(clone.join("README.md"))?,
         "hello from origin\n"
     );
+    assert_container_cache_marker("origin", &repo_name)?;
 
     Ok(())
 }
@@ -179,6 +180,7 @@ async fn docker_compose_origin_service_recovers_after_restart() -> Result<(), Bo
         std::fs::read_to_string(clone.join("README.md"))?,
         "hello from origin\n"
     );
+    assert_container_cache_marker("origin", &repo_name)?;
 
     Ok(())
 }
@@ -315,6 +317,8 @@ async fn docker_compose_origin_services_linearize_conflicting_pushes() -> Result
         git_stdout(&alternate_clone, ["rev-list", "--count", "HEAD"])?.trim(),
         "2"
     );
+    assert_container_cache_marker("origin", &repo_name)?;
+    assert_container_cache_marker("origin-alt", &repo_name)?;
 
     Ok(())
 }
@@ -367,6 +371,18 @@ where
         )
         .into())
     }
+}
+
+fn assert_container_cache_marker(service: &str, repo_name: &str) -> Result<(), Box<dyn Error>> {
+    let marker = format!("/var/lib/origin/cache/tenant/{repo_name}.git/.origin-cache-publication");
+    docker_compose(vec![
+        "exec".to_string(),
+        "-T".to_string(),
+        service.to_string(),
+        "test".to_string(),
+        "-s".to_string(),
+        marker,
+    ])
 }
 
 fn git<I, S>(cwd: &Path, args: I) -> Result<(), Box<dyn Error>>
