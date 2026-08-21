@@ -1,0 +1,1458 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RFC: Durable Substrate for Object-Store-Native Systems</title>
+  <style>
+    :root {
+      --ink: #17211b;
+      --muted: #617068;
+      --paper: #f6f3ea;
+      --panel: #fffdf7;
+      --line: #d8d3c5;
+      --green: #146b4b;
+      --green-soft: #dcece4;
+      --orange: #b45722;
+      --orange-soft: #f5e3d6;
+      --blue: #245b78;
+      --blue-soft: #deebf1;
+      --red: #a23b37;
+      --code: #18231d;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 6%, rgba(20, 107, 75, .08), transparent 24rem),
+        var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 900px);
+      gap: 44px;
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 34px 28px 90px;
+    }
+
+    nav {
+      position: sticky;
+      top: 24px;
+      align-self: start;
+      max-height: calc(100vh - 48px);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 253, 247, .86);
+      backdrop-filter: blur(12px);
+      padding: 18px;
+      font-size: 13px;
+    }
+
+    nav strong { display: block; margin-bottom: 10px; color: var(--green); }
+    nav a { display: block; color: var(--muted); text-decoration: none; padding: 4px 0; }
+    nav a:hover { color: var(--ink); }
+
+    main { min-width: 0; }
+    header { padding: 36px 0 24px; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--green); font-size: 13px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+    h1 { max-width: 780px; margin: 10px 0 14px; font-family: Georgia, "Times New Roman", serif; font-size: clamp(40px, 6vw, 68px); line-height: 1.02; letter-spacing: -.035em; }
+    .lede { max-width: 760px; color: var(--muted); font-size: 19px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+    .tag { border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; background: var(--panel); font-size: 12px; font-weight: 700; }
+
+    section { padding-top: 56px; }
+    h2 { margin: 0 0 18px; font-family: Georgia, "Times New Roman", serif; font-size: 34px; line-height: 1.15; }
+    h3 { margin: 32px 0 12px; font-size: 20px; }
+    h4 { margin: 24px 0 8px; font-size: 16px; }
+    p { margin: 10px 0; }
+    a { color: var(--green); }
+    code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: .91em; }
+    p code, li code, td code { background: #e9e5da; border-radius: 5px; padding: 2px 5px; }
+    pre { overflow: auto; margin: 16px 0; border-radius: 13px; background: var(--code); color: #edf5ef; padding: 19px 21px; line-height: 1.48; box-shadow: inset 0 0 0 1px rgba(255,255,255,.06); }
+    pre code { font-size: 13px; }
+
+    .callout { margin: 20px 0; border-left: 4px solid var(--green); border-radius: 0 12px 12px 0; background: var(--green-soft); padding: 14px 18px; }
+    .callout.warn { border-color: var(--orange); background: var(--orange-soft); }
+    .callout.danger { border-color: var(--red); background: #f3ddda; }
+    .callout strong { display: block; margin-bottom: 4px; }
+
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
+    .card { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 17px; }
+    .card h3, .card h4 { margin-top: 0; }
+
+    table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 13px; background: var(--panel); }
+    th, td { border: 1px solid var(--line); padding: 10px 11px; vertical-align: top; text-align: left; }
+    th { background: #eae5d9; }
+
+    .diagram { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; margin: 22px 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); padding: 22px; }
+    .node { min-width: 118px; border: 1px solid #b9c7bf; border-radius: 10px; background: white; padding: 12px; text-align: center; font-size: 13px; font-weight: 750; }
+    .node.authority { border-color: var(--green); box-shadow: 0 0 0 3px rgba(20,107,75,.08); }
+    .arrow { color: var(--green); font-size: 20px; animation: pulse 1.8s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: .35; transform: translateX(-2px); } 50% { opacity: 1; transform: translateX(2px); } }
+
+    .decision { border: 1px solid var(--green); background: linear-gradient(135deg, var(--panel), var(--green-soft)); border-radius: 16px; padding: 20px; margin: 20px 0; }
+    .decision strong { color: var(--green); }
+    .small { color: var(--muted); font-size: 13px; }
+    .status-good { color: var(--green); font-weight: 750; }
+    .status-no { color: var(--red); font-weight: 750; }
+    ul, ol { padding-left: 22px; }
+    li { margin: 5px 0; }
+    footer { margin-top: 70px; border-top: 1px solid var(--line); padding-top: 24px; color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 900px) {
+      .layout { display: block; padding: 18px 18px 70px; }
+      nav { position: relative; top: 0; max-height: none; margin-bottom: 24px; columns: 2; }
+      nav strong { column-span: all; }
+      .grid { grid-template-columns: 1fr; }
+      h1 { font-size: 44px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .arrow { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav aria-label="Sommaire">
+      <strong>RFC 0001</strong>
+      <a href="#resume">1. Résumé</a>
+      <a href="#contexte">2. Contexte</a>
+      <a href="#objectifs">3. Objectifs</a>
+      <a href="#invariants">4. Invariants</a>
+      <a href="#alternatives">5. Alternatives</a>
+      <a href="#architecture">6. Architecture</a>
+      <a href="#objects">7. Objets immuables</a>
+      <a href="#roots">8. Root register</a>
+      <a href="#journal">9. Journal</a>
+      <a href="#queue">10. Queue</a>
+      <a href="#workers">11. Worker runtime</a>
+      <a href="#cache">12. Cache</a>
+      <a href="#retention">13. Rétention et GC</a>
+      <a href="#origin">14. Happy path Origin</a>
+      <a href="#vector">15. Happy path vectoriel</a>
+      <a href="#failures">16. Pannes</a>
+      <a href="#testing">17. Tests</a>
+      <a href="#migration">18. Turbo-vector</a>
+      <a href="#operations">19. Exploitation</a>
+      <a href="#api">20. API publique</a>
+      <a href="#decisions">21. Décisions</a>
+      <a href="#references">22. Références</a>
+    </nav>
+
+    <main>
+      <header>
+        <div class="eyebrow">Request for Comments 0001</div>
+        <h1>Durable Substrate for Object-Store-Native Systems</h1>
+        <p class="lede">Une petite librairie Rust pour construire un hébergeur Git Origin-like et un moteur vectoriel turbopuffer-like au-dessus d’objets immuables, d’une publication conditionnelle, d’un journal optionnel et d’un cache local extensible.</p>
+        <div class="meta">
+          <span class="tag">Statut : proposition</span>
+          <span class="tag">Audience : storage / distributed systems</span>
+          <span class="tag">Référence : turbo-vector</span>
+          <span class="tag">Langage : Rust</span>
+        </div>
+      </header>
+
+      <section id="resume">
+        <h2>1. Résumé</h2>
+        <div class="decision">
+          <strong>Décision centrale</strong>
+          <p>Le noyau commun contient exactement deux primitives de cohérence : des objets immuables vérifiés et un petit registre de racines publié par compare-and-swap linéarisable.</p>
+        </div>
+        <p>Un journal ordonné, une queue de travail, la rétention des lecteurs et le cache hiérarchique sont fournis comme protocoles réutilisables au-dessus du noyau. Ils ne sont pas requis par toutes les applications et ne doivent pas alourdir le chemin Git.</p>
+        <p>Origin publie directement une racine de repository après avoir validé les objets et les mises à jour de refs. Un moteur vectoriel publie d’abord des références de WAL dans un journal ordonné, puis publie séparément des index dérivés. Les deux systèmes partagent le même stockage d’objets, le même CAS et les mêmes backends de cache.</p>
+        <div class="callout warn">
+          <strong>Limite de connaissance</strong>
+          <span>« Origin-like » désigne ici une architecture proposée. Les détails internes du produit Cursor Origin ne sont pas publics. Le design est fondé sur les invariants Git, l’architecture publique de turbopuffer et l’audit du repository local <code>turbo-vector</code>.</span>
+        </div>
+      </section>
+
+      <section id="contexte">
+        <h2>2. Contexte et problème</h2>
+        <p>Les deux systèmes visés ont des données volumineuses immuables, une petite quantité de métadonnées mutables et des nœuds de calcul remplaçables. Ils veulent utiliser l’object storage comme source durable, tout en servant les chemins chauds depuis RAM ou disque local.</p>
+        <p>Ils divergent cependant dès le niveau métier :</p>
+        <table>
+          <thead><tr><th>Dimension</th><th>Origin-like</th><th>Turbopuffer-like</th></tr></thead>
+          <tbody>
+            <tr><td>Unité de routage</td><td>Repository</td><td>Namespace ou shard</td></tr>
+            <tr><td>Mutation autoritative</td><td>Transaction de refs sur objets validés</td><td>Batch ordonné de mutations WAL</td></tr>
+            <tr><td>État dérivé</td><td>Pack layout, bitmaps, commit graph</td><td>ANN, filtres, FTS, segments compactés</td></tr>
+            <tr><td>Lecture forte</td><td>Refs cohérentes et fermeture d’objets disponible</td><td>Index à I + WAL commis dans (I, H]</td></tr>
+            <tr><td>Historique</td><td>Git commits et éventuellement reflog</td><td>WAL tronquable après checkpoint</td></tr>
+          </tbody>
+        </table>
+        <p>Une abstraction trop haute devient un « runtime universel » rempli de hooks. Une abstraction trop basse ne partage que le client S3 et laisse chaque application réimplémenter les protocoles dangereux. Cette RFC cherche le plus petit noyau qui centralise réellement la correction.</p>
+      </section>
+
+      <section id="objectifs">
+        <h2>3. Objectifs et non-objectifs</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Objectifs</h3>
+            <ul>
+              <li>Rendre explicite l’unique point de publication.</li>
+              <li>Rendre les crashs avant publication inoffensifs.</li>
+              <li>Fournir un journal group-commité sans confondre queue et vérité.</li>
+              <li>Permettre des caches RAM et disque entièrement jetables.</li>
+              <li>Tester chaque backend contre le même modèle déterministe.</li>
+              <li>Garder les APIs petites, lisibles et difficiles à mal utiliser.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Non-objectifs</h3>
+            <ul>
+              <li>Transactions atomiques entre plusieurs roots.</li>
+              <li>Consensus, placement ou failover inter-région.</li>
+              <li>Exactly-once pour les callbacks applicatifs.</li>
+              <li>Materializer ou compactor universel.</li>
+              <li>Queue universelle dans le noyau.</li>
+              <li>GC sémantique de Git ou des index vectoriels.</li>
+              <li>Cohérence distribuée des caches.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="invariants">
+        <h2>4. Invariants normatifs</h2>
+        <ol>
+          <li>Un objet uploadé n’est jamais visible logiquement avant une publication autoritative.</li>
+          <li>Une publication ne référence que des objets déjà durables dans le domaine de panne annoncé.</li>
+          <li>Le succès d’un CAS sur une root est le seul point de linéarisation d’une publication.</li>
+          <li>Une erreur réseau après un CAS peut signifier que la publication a réussi; l’API retourne <code>OutcomeUnknown</code>.</li>
+          <li>Un lecteur capture une root une fois et ne mélange jamais plusieurs révisions.</li>
+          <li>Une queue ou notification peut être perdue sans perdre le travail autoritatif.</li>
+          <li>Un cache ne participe jamais à la durabilité ni à la publication.</li>
+          <li>Une clé de cache mutable ne peut pas être utilisée pour une lecture forte sans revalidation.</li>
+          <li>Un lease n’est pas une preuve d’autorité si la publication ne vérifie pas un mécanisme de fencing.</li>
+          <li>Un objet manquant ou corrompu après publication provoque un échec fermé, jamais un rollback silencieux.</li>
+        </ol>
+      </section>
+
+      <section id="alternatives">
+        <h2>5. Alternatives évaluées</h2>
+        <table>
+          <thead><tr><th>Approche</th><th>Atouts</th><th>Faiblesses</th><th>Décision</th></tr></thead>
+          <tbody>
+            <tr><td>Objets bruts + CAS</td><td>Minimale, S3-native</td><td>Ne donne ni journal ni ergonomie d’ingestion</td><td class="status-good">Noyau retenu</td></tr>
+            <tr><td>Lease + head + log obligatoires</td><td>Single-writer simple</td><td>Horloges, fencing, inutile pour Git</td><td class="status-no">Rejeté comme noyau</td></tr>
+            <tr><td>Chaîne de commits obligatoire</td><td>Audit, résolution d’ACK</td><td>Historique et rétention non communs</td><td class="status-no">Option seulement</td></tr>
+            <tr><td>Ordered log autoritatif</td><td>Excellent pour ingestion vectorielle</td><td>Trop de machinery pour Git</td><td class="status-good">Protocole optionnel</td></tr>
+            <tr><td>Metadata DB transactionnelle</td><td>Multi-key, idempotence exacte</td><td>Nouveau système distribué à opérer</td><td class="status-no">Backend futur</td></tr>
+            <tr><td>Materializer runtime</td><td>Worker loops uniformes</td><td>Cache les invariants métier</td><td class="status-no">Rejeté</td></tr>
+          </tbody>
+        </table>
+        <p>La séparation retenue permet au journal d’être implémenté aujourd’hui sur objets immuables + CAS, puis demain sur un service d’append spécialisé, sans changer l’API du moteur vectoriel.</p>
+      </section>
+
+      <section id="architecture">
+        <h2>6. Architecture en couches</h2>
+        <pre><code>applications/
+  origin/                 # Git refs, OIDs, packs, reachability
+  vector/                 # WAL, ANN, tombstones, overlay, compaction
+
+protocols/
+  journal/                # ordered append + group commit + dedup
+  work_queue/             # at-least-once claims, notification only
+  worker_runtime/         # heartbeat, retry, cancellation, budgets
+  retention/              # reader epochs and grace periods
+  persistent_map/         # immutable trie/B-tree
+  chunked_object/         # verified chunks / Merkle layout
+
+cache/
+  loader/                 # authoritative read orchestration
+  policy/                 # load, admission, eviction
+  memory/                 # process-local
+  disk/                   # node-local
+
+core/
+  immutable_objects/      # durable immutable bytes
+  root_register/          # linearizable conditional publication
+  model/                  # deterministic reference implementation
+  conformance/            # backend contract tests</code></pre>
+        <div class="callout">
+          <strong>Règle d’architecture</strong>
+          <span>Une couche supérieure peut être remplacée sans modifier le contrat des couches inférieures. Le cœur ne connaît ni Git, ni vecteur, ni queue, ni cache.</span>
+        </div>
+      </section>
+
+      <section id="objects">
+        <h2>7. Objets immuables</h2>
+        <pre><code>pub struct StorageScope {
+    pub tenant: TenantId,
+    pub dataset: DatasetId,
+    pub encryption_domain: EncryptionDomainId,
+}
+
+// Fixed 32-byte substrate hash over canonical encoded bytes.
+// Git SHA-1/SHA-256 identities use a separate GitOid type.
+pub struct ObjectId([u8; 32]);
+
+pub enum Durability {
+    BackendDefault,
+    Required(DurabilityDomainId),
+}
+
+// Fields are private: callers cannot forge a durability proof.
+pub struct DurableObjectRef {
+    scope: ScopeId,
+    id: ObjectId,
+    length: u64,
+    domain: DurabilityDomainId,
+    format: ObjectFormat,
+}
+
+pub enum PutOutcome {
+    Stored(DurableObjectRef),
+    AlreadyPresent(DurableObjectRef),
+}
+
+#[async_trait]
+pub trait ImmutableObjects: Send + Sync {
+    async fn put(
+        &amp;self,
+        scope: &amp;StorageScope,
+        expected: ObjectId,
+        format: ObjectFormat,
+        length: u64,
+        body: ByteStream,
+        durability: Durability,
+    ) -> Result&lt;PutOutcome, ObjectError&gt;;
+
+    async fn read(
+        &amp;self,
+        scope: &amp;StorageScope,
+        id: &amp;ObjectId,
+    ) -> Result&lt;VerifiedStream, ObjectError&gt;;
+
+    async fn stat(
+        &amp;self,
+        scope: &amp;StorageScope,
+        id: &amp;ObjectId,
+    ) -> Result&lt;ObjectMetadata, ObjectError&gt;;
+}
+
+// Privileged capability, never handed to request handlers.
+pub trait ObjectAdmin {
+    async fn list_candidates(
+        &amp;self,
+        scope: &amp;StorageScope,
+        before: ObjectEpoch,
+    ) -> Result&lt;CandidateStream, ObjectError&gt;;
+
+    async fn delete(
+        &amp;self,
+        scope: &amp;StorageScope,
+        id: &amp;ObjectId,
+        proof: &amp;ClosedSweep,
+    ) -> Result&lt;(), ObjectError&gt;;
+}</code></pre>
+        <p><code>put</code> vérifie <code>H(domain_separator(format) || canonical_bytes)</code> et est idempotent pour le même ID, format et bytes. Un contenu différent sous le même ID est une corruption. Le succès retourne une référence non forgeable liée au scope et signifie que l’objet est durablement lisible dans le domaine demandé, pas simplement accepté par un frontend. Un backend qui ne supporte pas le domaine requis échoue avant l’ACK.</p>
+        <h3>Ranges</h3>
+        <p>Le hash d’un fichier entier ne permet pas de vérifier cryptographiquement une range isolée. La RFC sépare donc explicitement les capacités :</p>
+        <pre><code>pub trait RawRanges {
+    async fn read_range(
+        &amp;self,
+        scope: &amp;StorageScope,
+        id: &amp;ObjectId,
+        range: Range&lt;u64&gt;,
+    ) -> Result&lt;TransportCheckedRange, ObjectError&gt;;
+}
+
+pub trait ChunkedObjects {
+    async fn read_chunk(
+        &amp;self,
+        scope: &amp;StorageScope,
+        manifest: &amp;ObjectId,
+        index: u64,
+    ) -> Result&lt;VerifiedChunk, ObjectError&gt;;
+}</code></pre>
+        <p>Git peut utiliser des ranges brutes puis appliquer ses validations pack/index/OID. Un format vectoriel peut utiliser des chunks hashés ou un arbre Merkle.</p>
+      </section>
+
+      <section id="roots">
+        <h2>8. Root register</h2>
+        <p>Une root est un petit registre opaque, borné et linéarisable. Elle ne contient pas tout le manifeste; elle pointe vers une structure immutable applicative.</p>
+        <pre><code>pub struct RootName(String);
+pub struct Revision(Uuid); // opaque, unique, never reused
+
+pub struct RootState {
+    pub revision: Revision,
+    pub value: SmallBytes, // max 4 KiB by default
+    backend_compare_token: BackendToken, // private
+}
+
+pub enum ExpectedRevision {
+    Missing,
+    Exact(Revision),
+}
+
+pub enum PublishOutcome {
+    Applied(RootState),
+    Conflict { current: Option&lt;RootState&gt; },
+    OutcomeUnknown,
+}
+
+#[async_trait]
+pub trait RootRegister: Send + Sync {
+    async fn read(
+        &amp;self,
+        scope: &amp;StorageScope,
+        name: &amp;RootName,
+    )
+        -> Result&lt;Option&lt;RootState&gt;, RootError&gt;;
+
+    async fn compare_exchange(
+        &amp;self,
+        scope: &amp;StorageScope,
+        name: &amp;RootName,
+        expected: ExpectedRevision,
+        new_value: SmallBytes,
+    ) -> Result&lt;PublishOutcome, RootError&gt;;
+}</code></pre>
+        <div class="diagram" aria-label="Flux de publication">
+          <div class="node">Upload objets</div><div class="arrow">→</div>
+          <div class="node">Construire root</div><div class="arrow">→</div>
+          <div class="node authority">CAS root</div><div class="arrow">→</div>
+          <div class="node">Visible + ACK</div>
+        </div>
+        <p>Un timeout après le CAS produit <code>OutcomeUnknown</code>. Le cœur ne peut pas décider si deux opérations métier sont équivalentes. Les applications qui ont besoin de retry exact utilisent un receipt log ou le journal.</p>
+        <h3>Backends</h3>
+        <p>AWS S3 peut fournir ce registre dans un domaine unique avec <code>If-Match</code> et <code>If-None-Match: *</code>. L’adapter stocke une envelope contenant une nouvelle <code>Revision</code> aléatoire à chaque succès et utilise l’ETag uniquement comme token conditionnel privé. Réécrire les mêmes bytes ne réutilise donc jamais une révision logique et évite l’ABA. Chaque backend « S3-compatible » doit passer la suite de conformité; la compatibilité de protocole HTTP ne suffit pas à garantir la linéarisabilité.</p>
+      </section>
+
+      <section id="journal">
+        <h2>9. Journal ordonné</h2>
+        <p>Le journal est le protocole d’admission du moteur vectoriel. Il est construit au-dessus d’objets immuables et d’une root CAS, mais expose des garanties plus fortes et plus utiles.</p>
+        <pre><code>pub struct StreamId(String);
+pub struct RequestId(Uuid);
+pub struct ClientRequestKey([u8; 32]);
+
+// Minted by Journal and bound to scope, stream, digest and expiry.
+pub struct RequestToken {
+    scope: ScopeId,
+    stream: StreamId,
+    request_id: RequestId,
+    request_digest: [u8; 32],
+    expires_at: SystemTime,
+}
+
+// Fields are private. Positions are comparable inside one stream,
+// but callers cannot allocate or increment them.
+pub struct JournalPosition(u64);
+
+pub struct AppendRequest {
+    pub token: RequestToken,
+    pub records: Vec&lt;DurableObjectRef&gt;,
+}
+
+pub struct AppendReceipt {
+    scope: ScopeId,
+    pub request_id: RequestId,
+    pub first: JournalPosition,
+    pub last: JournalPosition,
+    pub head_revision: Revision,
+    pub idempotent_until: SystemTime,
+}
+
+pub enum AppendOutcome {
+    Appended(AppendReceipt),
+    AlreadyAppended(AppendReceipt),
+    OutcomeUnknown,
+}
+
+pub enum AppendResolution {
+    Committed(AppendReceipt),
+    Unknown,
+    RequestExpired,
+}
+
+pub struct CheckpointRef {
+    scope: ScopeId,
+    state: DurableObjectRef,
+    through: JournalPosition,
+}
+
+pub struct JournalSnapshot {
+    scope: ScopeId,
+    stream: StreamId,
+    checkpoint: Option&lt;CheckpointRef&gt;,
+    earliest_retained: JournalPosition,
+    tail: JournalPosition,
+    head_revision: Revision,
+}
+
+impl JournalSnapshot {
+    pub fn earliest_retained(&amp;self) -> &amp;JournalPosition;
+    pub fn tail(&amp;self) -> &amp;JournalPosition;
+    pub fn checkpoint(&amp;self) -> Option&lt;&amp;CheckpointRef&gt;;
+}
+
+#[async_trait]
+pub trait Journal: Send + Sync {
+    async fn create_stream(
+        &amp;self,
+        scope: &amp;StorageScope,
+        stream: &amp;StreamId,
+    ) -> Result&lt;JournalSnapshot, JournalError&gt;;
+
+    async fn issue_request(
+        &amp;self,
+        scope: &amp;StorageScope,
+        stream: &amp;StreamId,
+        client_key: ClientRequestKey,
+        request_digest: [u8; 32],
+        retry_window: Duration,
+    ) -> Result&lt;RequestToken, JournalError&gt;;
+
+    async fn append(
+        &amp;self,
+        scope: &amp;StorageScope,
+        stream: &amp;StreamId,
+        request: AppendRequest,
+    ) -> Result&lt;AppendOutcome, JournalError&gt;;
+
+    async fn snapshot(
+        &amp;self,
+        scope: &amp;StorageScope,
+        stream: &amp;StreamId,
+    ) -> Result&lt;JournalSnapshot, JournalError&gt;;
+
+    async fn scan(
+        &amp;self,
+        scope: &amp;StorageScope,
+        snapshot: &amp;JournalSnapshot,
+        after: Option&lt;JournalPosition&gt;,
+    ) -> Result&lt;RecordStream, JournalError&gt;;
+
+    async fn resolve(
+        &amp;self,
+        scope: &amp;StorageScope,
+        token: &amp;RequestToken,
+    ) -> Result&lt;AppendResolution, JournalError&gt;;
+
+    async fn lag(
+        &amp;self,
+        scope: &amp;StorageScope,
+        snapshot: &amp;JournalSnapshot,
+        after: &amp;JournalPosition,
+    ) -> Result&lt;u64, JournalError&gt;;
+}
+
+pub struct CheckpointProposal {
+    pub state: DurableObjectRef,
+    pub through: JournalPosition,
+    pub source_head: Revision,
+}
+
+pub trait JournalMaintenance {
+    async fn install_checkpoint(
+        &amp;self,
+        scope: &amp;StorageScope,
+        stream: &amp;StreamId,
+        proposal: CheckpointProposal,
+    ) -> Result&lt;CheckpointOutcome, JournalError&gt;;
+
+    async fn trim_before(
+        &amp;self,
+        scope: &amp;StorageScope,
+        stream: &amp;StreamId,
+        position: &amp;JournalPosition,
+        retention_proof: RetentionProof,
+    ) -> Result&lt;(), JournalError&gt;;
+}</code></pre>
+        <h3>Contrat</h3>
+        <ul>
+          <li>Ordre total uniquement dans un stream.</li>
+          <li>Un batch est entièrement visible ou absent.</li>
+          <li><code>issue_request</code> retourne le même token pour la même client key et le même digest pendant la fenêtre bornée par le service.</li>
+          <li>Réutiliser une client key avec un digest différent est rejeté.</li>
+          <li>Le même token retourne le même receipt jusqu’à son expiration autoritative.</li>
+          <li>Après expiration, le journal retourne <code>RequestExpired</code> et n’exécute jamais de nouveau la requête.</li>
+          <li>Les records sont des <code>DurableObjectRef</code> non forgeables produits par <code>put</code>.</li>
+          <li>Les positions sont comparables dans un stream; le calcul de distance appartient au journal.</li>
+          <li>Le scan s’arrête sur corruption ou trou; il ne saute jamais.</li>
+        </ul>
+        <h3>Implémentation V1</h3>
+        <pre><code>journal/&lt;stream&gt;/pages/&lt;content-id&gt;  # immutable page
+journal/&lt;stream&gt;/head                # CAS register
+
+JournalHead {
+    tail_page,
+    tail_position,
+    checkpoint,
+    earliest_retained,
+    recent_receipts_root,
+}
+
+JournalPageHeader {
+    format_version,
+    stream,
+    previous_page,
+    first_position,
+    last_position,
+    record_count,
+    records_checksum,
+}</code></pre>
+        <p>Un broker collecte plusieurs demandes pendant une petite fenêtre, écrit une page immutable, puis avance le head par un seul CAS. En cas de conflit, il relit le head, reconstruit la page et réessaie. Les pages perdantes deviennent des orphelins collectables.</p>
+        <p>Un checkpoint est installé par CAS avec son watermark et déplace <code>earliest_retained</code> uniquement après expiration des snapshots et branches qui protègent l’ancien préfixe. Un scan demandé avant ce watermark retourne <code>SnapshotExpired</code>. La troncature des pages intervient après la publication du checkpoint et la fin de la période de rétention.</p>
+        <div class="diagram" aria-label="Flux journal et indexation">
+          <div class="node">WAL immutable</div><div class="arrow">→</div>
+          <div class="node authority">Append journal</div><div class="arrow">→</div>
+          <div class="node">ACK write</div><div class="arrow">→</div>
+          <div class="node">Index async</div>
+        </div>
+      </section>
+
+      <section id="queue">
+        <h2>10. Queue et notifications</h2>
+        <p>La queue est un protocole séparé. Elle est utile pour répartir du travail coûteux, mais ne remplace jamais le journal ou une root autoritative.</p>
+        <pre><code>pub trait WorkQueue {
+    async fn enqueue(&amp;self, job: JobSpec) -> Result&lt;JobId, QueueError&gt;;
+    async fn claim(&amp;self, worker: WorkerId, limit: usize)
+        -> Result&lt;Vec&lt;ClaimedJob&gt;, QueueError&gt;;
+    async fn heartbeat(&amp;self, claim: &amp;ClaimToken)
+        -> Result&lt;ClaimToken, QueueError&gt;;
+    async fn ack(&amp;self, claim: ClaimToken)
+        -> Result&lt;(), QueueError&gt;;
+}</code></pre>
+        <p>Le token de claim inclut une génération de fencing : un ancien worker ne peut plus heartbeat ou ACK après réattribution. Cela ne fence pas automatiquement une publication applicative. Le worker doit publier son effet par CAS contre l’input root exact; si la génération de claim fait partie de la sémantique, elle doit aussi être vérifiée dans l’état publié. Les jobs sont at-least-once et leurs effets restent idempotents.</p>
+        <p>Pour l’indexation vectorielle, une notification peut ne contenir que le stream ID. Le worker relit ensuite le journal et compare son watermark. Une notification perdue est récupérée par reconciliation périodique.</p>
+      </section>
+
+      <section id="workers">
+        <h2>11. Worker runtime</h2>
+        <p><code>durable-worker</code> partage la mécanique opérationnelle des workers sans interpréter leur travail. Il gère claim, heartbeat, retry, cancellation, limites de ressources et observabilité. Il ne décide jamais si un index, un packfile ou une compaction est correct.</p>
+
+        <h3>Contrat public</h3>
+        <pre><code>pub struct JobContext {
+    pub claim: ClaimToken,
+    pub cancellation: CancellationToken,
+    pub budget: ResourceBudget,
+    pub attempt: u32,
+}
+
+pub enum JobDisposition {
+    Completed,
+    Superseded,
+    Retry { after: Duration },
+    Reconcile,
+    PermanentFailure { reason: String },
+}
+
+#[async_trait]
+pub trait JobHandler&lt;J&gt;: Send + Sync {
+    async fn run(
+        &amp;self,
+        context: JobContext,
+        job: J,
+    ) -> Result&lt;JobDisposition, WorkerError&gt;;
+}
+
+pub struct WorkerRuntime&lt;Q&gt; {
+    queue: Q,
+    concurrency: usize,
+    heartbeat_interval: Duration,
+    retry_policy: RetryPolicy,
+    resource_limits: ResourceLimits,
+}</code></pre>
+
+        <h3>Garanties</h3>
+        <ul>
+          <li>Un handler peut être exécuté plusieurs fois et temporairement en parallèle avec une tentative réattribuée.</li>
+          <li><code>Completed</code> signifie que le handler a observé son effet autoritatif publié; il ne remplace pas le CAS applicatif.</li>
+          <li>Le runtime renouvelle le claim pendant le calcul, mais le claim ne donne aucun droit de publication.</li>
+          <li>Un ACK perdu peut provoquer une nouvelle exécution; les outputs sont immuables et les publications idempotentes ou conditionnelles.</li>
+          <li>La cancellation arrête le travail coopérativement; elle ne rollback pas les objets déjà uploadés.</li>
+          <li>Une tentative perdante laisse des objets orphelins traités par la rétention/GC.</li>
+        </ul>
+
+        <h3>Responsabilités applicatives</h3>
+        <table>
+          <thead><tr><th>Partagé par durable-worker</th><th>Origin</th><th>Moteur vectoriel</th></tr></thead>
+          <tbody>
+            <tr><td>Claim, heartbeat, retry</td><td>Sélection des repos à repacker</td><td>Sélection des WAL ranges</td></tr>
+            <tr><td>Cancellation et budgets</td><td>Reachability Git</td><td>Tombstones et document versions</td></tr>
+            <tr><td>At-least-once execution</td><td>Pack/delta construction</td><td>ANN, filtres et FTS</td></tr>
+            <tr><td>Tracing et métriques</td><td>Commit graph et bitmaps</td><td>Watermarks et LSM levels</td></tr>
+            <tr><td>Backoff et poison-job policy</td><td>Reconciliation après push</td><td>Reconciliation après indexer concurrent</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Pattern de publication</h3>
+        <pre><code>capture input root / journal snapshot
+        ↓
+build immutable artifacts
+        ↓
+upload and verify
+        ↓
+reload or validate current input
+        ↓
+application-specific reconciliation
+        ↓
+GC-aware conditional publication
+        ↓
+ack job</code></pre>
+        <p>Le runtime fournit les briques de ce flow, mais la fonction de reconciliation reste dans l’application. Un repack Git doit recalculer reachability si des refs ont changé. Un indexer vectoriel doit vérifier que son intervalle WAL et son watermark restent valides.</p>
+
+        <div class="callout warn">
+          <strong>Abstraction rejetée</strong>
+          <span>La RFC ne définit pas de <code>Materializer</code>, <code>UniversalCompactor</code> ou callback transactionnel générique. Ces interfaces cacheraient la version d’entrée, l’idempotence, l’équivalence des outputs, le watermark et les règles de reconciliation.</span>
+        </div>
+
+        <h3>Reconciliation sans notification</h3>
+        <p>La queue accélère le déclenchement, mais chaque application possède un reconciler périodique. Origin détecte layouts sous-optimaux, packs trop nombreux, commit graphs ou bitmaps absents. Le moteur vectoriel détecte <code>journal tail &gt; indexed_through</code>, trop de segments, trop de tombstones ou un format d’index obsolète. Le runtime peut planifier et dédupliquer ces scans; les conditions restent métier.</p>
+      </section>
+
+      <section id="cache">
+        <h2>12. Cache hiérarchique et politiques de load</h2>
+        <p>Le cache est conçu comme un plan d’exécution local au-dessus d’objets immuables. Il sépare quatre responsabilités : stockage, load, admission et eviction.</p>
+        <div class="grid">
+          <div class="card"><h3>CacheStore</h3><p>Où vivent les bytes : RAM process-local ou disque node-local.</p></div>
+          <div class="card"><h3>LoadPolicy</h3><p>Comment lire : full object, raw range, verified chunks, bypass ou prefetch.</p></div>
+          <div class="card"><h3>AdmissionPolicy</h3><p>Quels résultats méritent RAM, disque, les deux ou aucun.</p></div>
+          <div class="card"><h3>EvictionPolicy</h3><p>Quels entries expulser sous pression : LRU, TinyLFU, GDSF ou politique métier.</p></div>
+        </div>
+
+        <h3>API</h3>
+        <pre><code>pub enum ObjectClass {
+    Metadata,
+    Index,
+    Data,
+    Pack,
+    Wal,
+}
+
+pub enum ReadIntent {
+    Interactive,
+    Scan,
+    Prefetch,
+    Background,
+}
+
+pub struct ReadRequest {
+    pub object: ObjectId,
+    pub class: ObjectClass,
+    pub intent: ReadIntent,
+    pub access: AccessPattern,
+    pub integrity: IntegrityRequirement,
+    pub priority: u8,
+}
+
+pub enum LoadPlan {
+    Full,
+    RawRange(Range&lt;u64&gt;),
+    Chunks(Vec&lt;u64&gt;),
+    Bypass,
+}
+
+pub struct CacheKey {
+    scope: ScopeId,
+    pub object: ObjectId,
+    pub representation: RepresentationId,
+    pub extent: CachedExtent,
+    pub required_integrity: IntegrityRequirement,
+}
+
+pub struct CacheEntryMetadata {
+    pub verified_at: SystemTime,
+    pub verification: VerificationMethod,
+    pub local_checksum: [u8; 32],
+}
+
+#[async_trait]
+pub trait CacheStore: Send + Sync {
+    fn scope(&amp;self) -> CacheScope; // Process or Node
+    async fn get(&amp;self, key: &amp;CacheKey)
+        -> Result&lt;Option&lt;CacheEntry&gt;, CacheError&gt;;
+    async fn insert(&amp;self, entry: CacheEntry)
+        -> Result&lt;(), CacheError&gt;;
+    async fn remove(&amp;self, key: &amp;CacheKey)
+        -> Result&lt;(), CacheError&gt;;
+    async fn usage(&amp;self) -> Result&lt;TierUsage, CacheError&gt;;
+}
+
+pub trait LoadPolicy: Send + Sync {
+    fn plan(
+        &amp;self,
+        request: &amp;ReadRequest,
+        state: &amp;CacheState,
+    ) -> LoadPlan;
+}
+
+pub trait AdmissionPolicy: Send + Sync {
+    fn admit(
+        &amp;self,
+        object: &amp;CachedObject,
+        state: &amp;CacheState,
+    ) -> AdmissionDecision;
+}
+
+pub trait EvictionPolicy: Send + Sync {
+    fn record(&amp;mut self, event: CacheEvent);
+    fn victims(&amp;mut self, required_bytes: u64) -> Vec&lt;CacheKey&gt;;
+}
+
+#[async_trait]
+pub trait CachedObjects: Send + Sync {
+    async fn read(&amp;self, request: ReadRequest)
+        -> Result&lt;CachedRead, CacheError&gt;;
+    async fn prefetch(&amp;self, requests: Vec&lt;ReadRequest&gt;)
+        -> Result&lt;PrefetchReport, CacheError&gt;;
+}</code></pre>
+
+        <h3>Assemblage</h3>
+        <pre><code>let cache = CacheStack::builder(scope, authoritative_objects)
+    .tier(
+        MemoryTier::new(8.gib()),
+        TinyLfu::default(),
+    )
+    .tier(
+        DiskTier::new("/var/cache/substrate", 500.gib()),
+        Gdsf::size_aware(),
+    )
+    .load_policy(AdaptiveLoadPolicy::new()
+        .full(ObjectClass::Metadata)
+        .chunks(ObjectClass::Index)
+        .application_ranges(ObjectClass::Pack)
+        .bypass_large_scans())
+    .admission(FrequencyAndCostAdmission::default())
+    .build()?;</code></pre>
+
+        <p>Chaque <code>CacheStack</code> est lié à un <code>StorageScope</code> immutable à sa construction. Le loader produit des <code>CacheKey</code> contenant un <code>ScopeId</code> privé; deux tenants ou encryption domains ne partagent donc jamais une entrée par accident, même si les bytes ont le même hash.</p>
+
+        <h3>Où vit le cache</h3>
+        <table>
+          <thead><tr><th>Tier</th><th>Scope</th><th>Contenu</th><th>Perte</th></tr></thead>
+          <tbody>
+            <tr><td>MemoryTier</td><td>Processus</td><td>Metadata, index pages, hot chunks</td><td>Sans conséquence</td></tr>
+            <tr><td>DiskTier</td><td>Nœud</td><td>Objets/chunks immuables vérifiés</td><td>Rewarm depuis object store</td></tr>
+            <tr><td>Application memoizer</td><td>Processus</td><td>État décodé par root ID</td><td>Recompute</td></tr>
+            <tr><td>Object storage</td><td>Durable</td><td>Source de vérité</td><td>Incident de durabilité</td></tr>
+          </tbody>
+        </table>
+
+        <div class="diagram" aria-label="Lecture via cache">
+          <div class="node">Application hint</div><div class="arrow">→</div>
+          <div class="node">LoadPolicy</div><div class="arrow">→</div>
+          <div class="node">RAM / Disk</div><div class="arrow">→</div>
+          <div class="node authority">Object store</div>
+        </div>
+
+        <h3>Règles de correction</h3>
+        <ul>
+          <li>Les clés incluent l’<code>ObjectId</code>, la représentation et la range/chunk.</li>
+          <li>Une entrée est admise seulement après le niveau de vérification demandé; le loader, jamais l’appelant, produit la provenance de vérification.</li>
+          <li>Chaque entrée disque porte un checksum local vérifié à la lecture; une mismatch expulse l’entrée puis recharge depuis durable.</li>
+          <li>Un pin de cache empêche uniquement une eviction locale pendant l’utilisation.</li>
+          <li>Un pin de cache ne protège jamais un objet contre le GC durable.</li>
+          <li>Les roots mutables ne passent pas par l’object cache.</li>
+          <li>Une lecture forte appelle toujours <code>RootRegister::read</code>.</li>
+          <li>Une lecture eventual peut utiliser un <code>RootMemoizer</code> avec TTL explicite.</li>
+          <li>Les erreurs négatives ne sont pas cachées par défaut.</li>
+          <li>Une invalidation n’est pas requise pour les objets immuables.</li>
+        </ul>
+
+        <h3>Extension métier</h3>
+        <p>Origin peut marquer les pack indexes et commit graphs comme metadata à haute réutilisation, puis demander des ranges de packs déterminées par Git. Le moteur vectoriel peut charger les centroides supérieurs en RAM, les pages de buckets en SSD et bypasser les scans froids. Ces choix restent des politiques remplaçables, pas des branches dans le loader.</p>
+      </section>
+
+      <section id="retention">
+        <h2>13. Rétention, lecteurs et GC</h2>
+        <p>Lire une ancienne root ne protège pas ses objets. Une application entre dans un epoch avant sa première lecture autoritative; cet epoch protège toutes les roots et snapshots observables après l’entrée jusqu’à <code>leave</code> ou expiration. Une application choisit une des stratégies suivantes :</p>
+        <ul>
+          <li>Grace period supérieure à la durée maximale d’une opération.</li>
+          <li>Reader epochs durables et renouvelables.</li>
+          <li>Snapshots explicitement pinés.</li>
+          <li>Absence de GC pour une première version.</li>
+        </ul>
+        <pre><code>pub trait RetentionEpochs {
+    async fn enter(&amp;self, scope: DatasetId)
+        -> Result&lt;ReadEpoch, RetentionError&gt;;
+    async fn renew(&amp;self, epoch: &amp;ReadEpoch)
+        -> Result&lt;ReadEpoch, RetentionError&gt;;
+    async fn leave(&amp;self, epoch: ReadEpoch)
+        -> Result&lt;(), RetentionError&gt;;
+    async fn safe_before(&amp;self, scope: DatasetId)
+        -> Result&lt;Epoch, RetentionError&gt;;
+}</code></pre>
+        <h3>Barrière de publication</h3>
+        <p>Le GC n’est pas activé avec <code>ObjectAdmin</code> seul. Le protocole optionnel <code>GcCoordinator</code> impose qu’une publication référence uniquement des objets déjà atteignables depuis sa root de base, ou des objets protégés dans l’epoch GC courant. Réutiliser un ancien orphelin exige donc une nouvelle protection avant le CAS. Le sweeper ferme l’epoch, attend les publishers qui y ont obtenu une protection, puis supprime conditionnellement. Cette règle empêche une publication de rendre vivant un candidat entre la dernière revalidation et sa suppression.</p>
+        <pre><code>pub trait GcCoordinator {
+    async fn protect(
+        &amp;self,
+        scope: &amp;StorageScope,
+        root: &amp;RootName,
+        expected: &amp;ExpectedRevision,
+        new_value_digest: [u8; 32],
+        objects: Vec&lt;DurableObjectRef&gt;,
+    ) -> Result&lt;PublicationPermit, GcError&gt;;
+
+    async fn begin_sweep(
+        &amp;self,
+        scope: &amp;StorageScope,
+    ) -> Result&lt;SweepEpoch, GcError&gt;;
+
+    async fn close_sweep(
+        &amp;self,
+        sweep: SweepEpoch,
+    ) -> Result&lt;ClosedSweep, GcError&gt;;
+
+    async fn complete_sweep(
+        &amp;self,
+        sweep: ClosedSweep,
+    ) -> Result&lt;(), GcError&gt;;
+}
+
+pub trait GcAwarePublisher {
+    async fn compare_exchange(
+        &amp;self,
+        scope: &amp;StorageScope,
+        root: &amp;RootName,
+        expected: ExpectedRevision,
+        new_value: SmallBytes,
+        referenced_objects: Vec&lt;DurableObjectRef&gt;,
+        permit: PublicationPermit,
+    ) -> Result&lt;PublishOutcome, GcError&gt;;
+}
+
+// The permit is private and binds scope, root, expected revision,
+// new-value digest, referenced objects and current GC epoch.
+// ClosedSweep is private, scope-bound, rejects new permits for its epoch,
+// and is returned only after every outstanding permit has resolved.
+// RootRegister alone makes no GC promise.</code></pre>
+        <h3>Algorithme de GC</h3>
+        <ol>
+          <li>Ouvrir un sweep epoch et capturer les roots/checkpoints retenus.</li>
+          <li>Marquer les objets selon le graphe applicatif.</li>
+          <li>Inclure les protections de publication et uploads plus récents que la grace period.</li>
+          <li>Attendre un safety horizon.</li>
+          <li>Appeler <code>close_sweep</code>, fermer l’epoch aux nouveaux permits et attendre les publishers déjà protégés.</li>
+          <li>Relire les roots, revalider les candidats, supprimer avec la preuve <code>ClosedSweep</code>, puis appeler <code>complete_sweep</code>.</li>
+        </ol>
+        <p>Le noyau ne peut pas déduire la reachability depuis des payloads opaques. Il fournit les mécanismes; Git et le moteur vectoriel définissent les racines sémantiques. Sans <code>GcCoordinator</code>, la V1 conserve les objets ou utilise uniquement une lifecycle policy sur des préfixes de staging qui ne peuvent jamais être republiés.</p>
+      </section>
+
+      <section id="origin">
+        <h2>14. Happy path Origin-like</h2>
+        <p>Cette section spécifie un substrate Git refs/objects, pas une forge complète. Pull requests, permissions, GitHub synchronization, search, webhooks et metadata produit restent hors périmètre.</p>
+        <h3>Modèle applicatif</h3>
+        <pre><code>struct GitPublication {
+    refs_root: ObjectId,          // persistent trie
+    object_catalog_root: ObjectId,// Git OID -> representations
+    layout_root: ObjectId,        // packs, indexes, bitmaps
+    receipt_root: ObjectId,        // mandatory for writable repositories
+    incarnation: RepositoryIncarnation,
+}
+
+struct GitObjectLocation {
+    pack: ObjectId,
+    offset: u64,
+    length: u64,
+    encoding: GitEncoding,
+}</code></pre>
+        <h3>Push atomique multi-ref</h3>
+        <pre><code>async fn push(repo: &amp;GitRepository, request: Push) -> Result&lt;PushReceipt&gt; {
+    let base = repo.roots.read(&amp;repo.scope, &amp;repo.root_name).await?
+        .ok_or(Error::RepositoryMissing)?;
+    let current = repo.load_publication(&amp;base).await?;
+
+    let quarantine = repo.git.receive_pack(request.body).await?;
+    let quarantine = repo.git.resolve_thin_pack(quarantine, &amp;current).await?;
+    repo.git.verify_object_ids_and_collisions(&amp;quarantine).await?;
+
+    let pack = repo.objects.put(
+        &amp;repo.scope,
+        quarantine.pack_id,
+        ObjectFormat::GitPack,
+        quarantine.length,
+        quarantine.stream,
+        Durability::Required(repo.failover_domain.clone()),
+    ).await?.into_durable_ref();
+
+    let pack_index = repo.git.build_pack_index(&amp;pack).await?;
+    let pack_index = repo.put_artifact(pack_index).await?;
+
+    repo.git.check_expected_refs(&amp;current, &amp;request.ref_updates)?;
+    repo.git.check_connectivity(&amp;current, &amp;quarantine).await?;
+    repo.git.run_pure_policy_hooks(&amp;current, &amp;request).await?;
+
+    let next_catalog = repo.extend_object_catalog(
+        current.object_catalog_root,
+        &amp;quarantine.objects,
+        &amp;pack,
+        &amp;pack_index,
+    ).await?;
+    let next_refs = repo.update_ref_trie(
+        current.refs_root,
+        &amp;request.ref_updates,
+    ).await?;
+    let next_layout = repo.extend_layout(
+        current.layout_root,
+        pack,
+        pack_index,
+    ).await?;
+
+    repo.git.verify_published_closure(
+        &amp;next_refs,
+        &amp;next_catalog,
+    ).await?;
+
+    let next = repo.build_next_publication(
+        current,
+        next_refs,
+        next_catalog,
+        next_layout,
+        repo.receipt_record(&amp;request),
+    ).await?;
+    let next_root = repo.store_publication(next).await?;
+    let expected = ExpectedRevision::Exact(base.revision);
+    let new_value = encode_root(&amp;next_root);
+    let referenced = next_root.referenced_objects();
+    let permit = repo.gc.protect(
+        &amp;repo.scope,
+        &amp;repo.root_name,
+        &amp;expected,
+        hash(&amp;new_value),
+        referenced.clone(),
+    ).await?;
+
+    match repo.gc_publisher.compare_exchange(
+        &amp;repo.scope,
+        &amp;repo.root_name,
+        expected,
+        new_value,
+        referenced,
+        permit,
+    ).await? {
+        PublishOutcome::Applied(root) => Ok(repo.receipt(root, request.id)),
+        PublishOutcome::Conflict { current } => {
+            repo.retry_or_reject_after_rechecking(current, request).await
+        }
+        PublishOutcome::OutcomeUnknown => repo.resolve_push(request.id).await,
+    }
+}</code></pre>
+        <p>Le pack n’est pas « déplacé » de quarantine vers live. Il devient live parce que la nouvelle racine le référence. Un push perdant peut réutiliser son pack immutable, mais doit revalider refs, policy et connectivity. Un repository writable conserve obligatoirement les receipts pendant la fenêtre de retry annoncée. Si un ACK reste ambigu après expiration, l’API retourne explicitement <code>PushOutcome::Unresolved</code>; elle ne déclare jamais un échec par absence de preuve.</p>
+
+        <h3>Fetch cohérent</h3>
+        <pre><code>async fn fetch(repo: &amp;GitRepository, request: Fetch) -> Result&lt;PackStream&gt; {
+    let epoch = repo.retention.enter(repo.id).await?;
+    let root = repo.roots.read(&amp;repo.scope, &amp;repo.root_name).await?
+        .ok_or(Error::RepositoryMissing)?;
+    let publication = repo.load_publication(&amp;root).await?;
+
+    let advertised = repo.git.advertise_refs(&amp;publication, &amp;request)?;
+    let wants = repo.git.validate_wants(
+        &amp;publication,
+        request.wants,
+        request.depth,
+        request.filter,
+    )?;
+    let objects = repo.git.negotiate(wants, request.haves).await?;
+    let stream = repo.git.build_pack_stream(
+        &amp;publication,
+        objects,
+        &amp;repo.cache,
+    ).await?;
+
+    stream.release_epoch_on_drop(epoch);
+    Ok(stream)
+}</code></pre>
+
+        <h3>Matérialisation locale complète</h3>
+        <p>Un adapter de compatibilité peut reconstruire un bare repository complet sur disque pour utiliser les binaires Git existants. Ce composant est applicatif :</p>
+        <pre><code>FullRepoMaterializer::restore(root)
+    .write_refs()
+    .link_cached_packs()
+    .fetch_missing_packs()
+    .write_multi_pack_index()
+    .activate_atomically();</code></pre>
+        <p>Le repository logique complet est disponible, mais la librairie n’impose pas de copier tous les bytes en RAM ou sur disque. Un serveur natif peut lire les indexes et ranges nécessaires.</p>
+
+        <h3>Repack</h3>
+        <p>Le repacker construit un nouveau layout depuis une root capturée. Si un push gagne entre-temps, son CAS échoue. Il ne fusionne pas simplement des listes de packs : il recharge la publication gagnante, recalcule reachability et représentations depuis cet état exact, puis construit une nouvelle candidate. Les anciens packs restent retenus jusqu’à la fin des lecteurs de l’ancien layout.</p>
+      </section>
+
+      <section id="vector">
+        <h2>15. Happy path turbopuffer-like</h2>
+        <h3>Création du namespace</h3>
+        <pre><code>let genesis = journal.create_stream(&amp;scope, &amp;stream).await?;
+let empty_index = VectorIndexRoot {
+    segments: vec![],
+    indexed_through: genesis.tail().clone(),
+    source_checkpoint: genesis.checkpoint().cloned(),
+};
+let stored = store_index_root(&amp;empty_index).await?;
+let expected = ExpectedRevision::Missing;
+let permit = gc.protect(
+    &amp;scope,
+    &amp;index_name,
+    &amp;expected,
+    hash(&amp;stored.value),
+    stored.referenced_objects.clone(),
+).await?;
+gc_publisher.compare_exchange(
+    &amp;scope,
+    &amp;index_name,
+    expected,
+    stored.value,
+    stored.referenced_objects,
+    permit,
+).await?;</code></pre>
+        <p>La création est idempotente. Un stream vide possède une position genesis; le premier index n’a donc pas besoin d’un cas implicite « root absente ».</p>
+        <h3>Ingestion durable</h3>
+        <pre><code>async fn ingest(ns: &amp;VectorNamespace, batch: MutationBatch)
+    -> Result&lt;WriteReceipt&gt;
+{
+    let wal = encode_wal(&amp;batch)?;
+    let wal_id = ObjectId::hash_canonical(ObjectFormat::VectorWal, &amp;wal);
+    let wal_ref = ns.objects.put(
+        &amp;ns.scope,
+        wal_id.clone(),
+        ObjectFormat::VectorWal,
+        wal.len() as u64,
+        stream(wal),
+        Durability::Required(ns.failover_domain.clone()),
+    ).await?.into_durable_ref();
+
+    let token = ns.journal.issue_request(
+        &amp;ns.scope,
+        &amp;ns.stream,
+        batch.client_request_key,
+        batch.digest(),
+        batch.retry_window,
+    ).await?;
+
+    let outcome = ns.journal.append(
+        &amp;ns.scope,
+        &amp;ns.stream,
+        AppendRequest {
+            token: token.clone(),
+            records: vec![wal_ref],
+        },
+    ).await?;
+
+    let append = match outcome {
+        AppendOutcome::Appended(receipt)
+        | AppendOutcome::AlreadyAppended(receipt) => receipt,
+        AppendOutcome::OutcomeUnknown => {
+            match ns.journal.resolve(
+                &amp;ns.scope,
+                &amp;token,
+            ).await? {
+                AppendResolution::Committed(receipt) => receipt,
+                AppendResolution::Unknown => {
+                    return ns.retry_same_append(batch).await;
+                }
+                AppendResolution::RequestExpired => {
+                    return Err(Error::IdempotencyWindowExpired);
+                }
+            }
+        }
+    };
+
+    ns.notifications.best_effort_notify(ns.id).await;
+    Ok(WriteReceipt::durable(append.last))
+}</code></pre>
+        <p>L’ACK n’attend pas l’index. Il garantit que le WAL est durable et ordonné. La queue n’est plus située entre WAL et durabilité.</p>
+
+        <h3>Query forte</h3>
+        <p>Le protocole ci-dessous est la cible de cette librairie, inspirée par turbopuffer; il ne prétend pas reproduire exactement ses garanties de production documentées.</p>
+        <pre><code>async fn strong_query(ns: &amp;VectorNamespace, q: Query) -> Result&lt;Hits&gt; {
+    let epoch = ns.retention.enter(ns.id).await?;
+    let index_root = ns.index_roots.read(&amp;ns.scope, &amp;ns.index_name).await?
+        .ok_or(Error::IndexMissing)?;
+    let index = ns.load_index_snapshot(&amp;index_root).await?;
+    let journal = ns.journal.snapshot(&amp;ns.scope, &amp;ns.stream).await?;
+
+    ensure!(
+        journal.earliest_retained() &lt;= &amp;index.indexed_through
+            &amp;&amp; &amp;index.indexed_through &lt;= journal.tail(),
+        Error::SnapshotExpired,
+    );
+
+    let indexed = ns.search_index(&amp;index, &amp;q, &amp;ns.cache);
+    let delta = ns.replay_for_query(
+        &amp;journal,
+        index.indexed_through.clone(),
+        &amp;q,
+    );
+
+    let (indexed, delta) = tokio::try_join!(indexed, delta)?;
+    // Delta first computes the latest mutation/tombstone per document ID.
+    // Every mutated ID is removed from indexed hits before reranking.
+    let hits = suppress_stale_index_versions_and_merge(
+        indexed,
+        delta,
+        journal.tail().clone(),
+    );
+    ns.retention.leave(epoch).await?;
+    Ok(hits)
+}</code></pre>
+
+        <h3>Indexation</h3>
+        <pre><code>let epoch = retention.enter(scope.dataset).await?;
+let base_root = index_roots
+    .read(&amp;scope, &amp;index_name)
+    .await?
+    .ok_or(Error::IndexMissing)?;
+let base = load_index_snapshot(&amp;base_root).await?;
+let journal_snapshot = journal_client
+    .snapshot(&amp;scope, &amp;stream)
+    .await?;
+let records = journal_client.scan(
+    &amp;scope,
+    &amp;journal_snapshot,
+    Some(base.indexed_through.clone()),
+).await?;
+let segment = build_index_segment(records).await?;
+let segment_ref = put_index_segment(&amp;scope, segment).await?;
+
+let next = base.with_segment(segment_ref)
+    .indexed_through(journal_snapshot.tail().clone());
+let new_value = store_index_root(&amp;next).await?;
+let referenced = next.referenced_objects();
+let expected = ExpectedRevision::Exact(base_root.revision);
+let permit = gc.protect(
+    &amp;scope,
+    &amp;index_name,
+    &amp;expected,
+    hash(&amp;new_value),
+    referenced.clone(),
+).await?;
+
+// A stale indexer loses the CAS and cannot regress the watermark.
+gc_publisher.compare_exchange(
+    &amp;scope,
+    &amp;index_name,
+    expected,
+    new_value,
+    referenced,
+    permit,
+).await?;
+retention.leave(epoch).await?;</code></pre>
+
+        <h3>Compaction</h3>
+        <p>La compaction capture une génération, fusionne des segments immuables, puis remplace exactement ces inputs par un output. Si les inputs ne sont plus présents après conflit CAS, l’output est abandonné. Une query ayant capturé l’ancienne root continue sur les anciens segments.</p>
+
+        <h3>Branch copy-on-write</h3>
+        <p>Une branche référence une root et un checkpoint de journal durables exacts du parent, puis reçoit son propre stream. La création enregistre ce checkpoint comme retention root avant de rendre la branche visible. Elle ne référence jamais le head mutable du parent. Les writes ultérieurs sont indépendants; le checkpoint reste protégé jusqu’à suppression ou rematérialisation complète de la branche.</p>
+      </section>
+
+      <section id="failures">
+        <h2>16. Modèle de panne</h2>
+        <table>
+          <thead><tr><th>Scénario</th><th>Résultat requis</th><th>Mécanisme</th></tr></thead>
+          <tbody>
+            <tr><td>Crash après upload, avant CAS</td><td>État invisible, objet orphelin</td><td>Publication séparée</td></tr>
+            <tr><td>CAS réussi, ACK perdu</td><td>Résultat inconnu mais état stable</td><td><code>OutcomeUnknown</code> + receipt métier</td></tr>
+            <tr><td>Deux publishers</td><td>Un seul gagnant</td><td>Expected revision opaque</td></tr>
+            <tr><td>WAL écrit, broker mort</td><td>Retry append sans doublon</td><td>Request ID + journal dedup</td></tr>
+            <tr><td>Notification perdue</td><td>Indexation eventual</td><td>Reconciliation journal tail</td></tr>
+            <tr><td>Indexer stale</td><td>Pas de régression</td><td>CAS sur index root + watermark</td></tr>
+            <tr><td>Lease worker expiré</td><td>Ancien ACK rejeté</td><td>Claim fencing token</td></tr>
+            <tr><td>Lecteur pendant GC</td><td>Objet retenu ou snapshot expiré explicitement</td><td>Epoch ou grace period</td></tr>
+            <tr><td>Objet corrompu</td><td>Fail closed</td><td>Hash/checksum et erreur distincte</td></tr>
+            <tr><td>Failover inter-région</td><td>Hors contrat du CAS local</td><td>Autorité externe + incarnation</td></tr>
+          </tbody>
+        </table>
+        <div class="callout danger">
+          <strong>Failover</strong>
+          <span>Un CAS dans un bucket ne remplace pas un protocole de promotion inter-région. Une promotion doit avancer une incarnation non réutilisable, garantir le RPO annoncé et empêcher les anciens writers de publier dans le nouveau domaine.</span>
+        </div>
+      </section>
+
+      <section id="testing">
+        <h2>17. Stratégie de test</h2>
+        <h3>Modèle déterministe</h3>
+        <p>La référence est une machine d’état synchrone utilisant temps logique et commandes sérialisables. Elle ne réutilise pas l’implémentation async de production.</p>
+        <pre><code>enum Command {
+    PutObject { id, bytes },
+    ReadRoot { name },
+    CompareExchange { name, expected, value },
+    JournalAppend { stream, request },
+    JournalScan { stream, snapshot, after },
+    CacheRead { request },
+    AdvanceTime(Ticks),
+    CollectGarbage { scope },
+    Crash,
+}</code></pre>
+        <h3>Fault injection</h3>
+        <pre><code>enum FaultPoint {
+    AfterObjectPersistBeforeAck,
+    BeforeRootConditionCheck,
+    AfterRootCommitBeforeAck,
+    AfterJournalPagePersistBeforeHeadCas,
+    AfterJournalHeadCasBeforeAck,
+    DuringCacheFill,
+    DuringGcMark,
+    DuringGcSweep,
+}</code></pre>
+        <h3>Conformance backend</h3>
+        <ul>
+          <li><code>put</code> identique est idempotent; contenu différent rejeté.</li>
+          <li>Deux CAS sur la même révision ne peuvent pas réussir.</li>
+          <li>Chaque CAS réussi reçoit une revision fraîche, même pour les mêmes bytes.</li>
+          <li>Un ACK perdu après commit est reproductible.</li>
+          <li>Un journal ne présente ni trou ni batch partiel.</li>
+          <li>Un Request ID ne produit qu’un receipt logique pendant sa fenêtre de déduplication et est rejeté après expiration.</li>
+          <li>Deux tentatives du même job peuvent produire des artefacts, mais une seule publication applicative gagne.</li>
+          <li>Un worker expiré ne peut plus heartbeat ou ACK; son CAS applicatif reste soumis à la révision d’entrée.</li>
+          <li>Un ACK de job perdu relance le handler sans dupliquer l’effet autoritatif.</li>
+          <li>Une entrée cache corrompue est supprimée et rechargée.</li>
+          <li>Une root forte n’est jamais servie uniquement depuis un TTL cache.</li>
+        </ul>
+        <h3>Property tests</h3>
+        <p>Des historiques générés sont exécutés contre le modèle et chaque backend. Tout échec conserve seed, commandes et interleaving. Les tests de concurrence utilisent des pauses déterministes, jamais des sleeps arbitraires.</p>
+      </section>
+
+      <section id="migration">
+        <h2>18. Étude de cas : turbo-vector</h2>
+        <p>L’audit du repository <code>/Users/tom.darmon/dev/turbo-vector</code> a directement influencé cette RFC.</p>
+        <table>
+          <thead><tr><th>État actuel</th><th>Risque</th><th>Direction RFC</th></tr></thead>
+          <tbody>
+            <tr><td>Manifest immutable puis overwrite de <code>current.json</code><br><span class="small"><code>rust/crates/api/src/storage_logic.rs:773-825</code></span></td><td>Régression par writer retardé</td><td>CAS obligatoire du root courant</td></tr>
+            <tr><td>WAL → status → registry → queue<br><span class="small"><code>rust/crates/api/src/routes.rs:1551-1559</code></span></td><td>WAL durable mais jamais admis</td><td>Append journal atomique après upload</td></tr>
+            <tr><td>Idempotency read puis write<br><span class="small"><code>rust/crates/api/src/routes.rs:1514-1588</code></span></td><td>Double admission concurrente</td><td>Request ID dédupliqué dans le journal</td></tr>
+            <tr><td>Queue JSON unique avec broker CAS<br><span class="small"><code>rust/crates/queue/src/lib.rs:41-160</code></span></td><td>Croissance et hot key</td><td>Pages immuables + petit head CAS</td></tr>
+            <tr><td>Queue comme ordre de vérité</td><td>Notification et durabilité confondues</td><td>Journal autoritatif, queue best-effort</td></tr>
+            <tr><td>Queries sur manifest uniquement</td><td>ACK non visible</td><td>Consistency modes et overlay WAL</td></tr>
+            <tr><td>Segments jamais compactés</td><td>Replay et stockage non bornés</td><td>Checkpoint/watermark/retention</td></tr>
+            <tr><td>Caches RAM/SSD déjà présents</td><td>Politiques couplées au métier</td><td>Load/admission/eviction séparés</td></tr>
+            <tr><td>Pas de range API</td><td>Metadata ANN chargée entière</td><td>Raw ranges + chunked verified objects</td></tr>
+          </tbody>
+        </table>
+        <p>La queue existante prouve qu’une machine d’état sur document CAS peut être élégante et testable. Elle ne doit toutefois pas rester simultanément queue, ordre d’admission et mécanisme de recovery.</p>
+      </section>
+
+      <section id="operations">
+        <h2>19. Exploitation, sécurité et observabilité</h2>
+        <h3>Isolation</h3>
+        <p><code>DatasetId</code>, <code>TenantId</code> et <code>EncryptionDomainId</code> sont des types distincts. Une chaîne « namespace » ne doit pas définir implicitement l’autorisation, la facturation et le préfixe d’objets.</p>
+        <h3>Métriques minimales</h3>
+        <ul>
+          <li>Latence et conflits CAS par root.</li>
+          <li>Journal append batch size, wait time et retries.</li>
+          <li>Committed tail moins indexed watermark.</li>
+          <li>Cache hits par tier, class et intent.</li>
+          <li>Admission, promotion, eviction et bytes relus depuis durable.</li>
+          <li>Objets orphelins et âge du plus ancien candidat GC.</li>
+          <li>Corruption, missing objects et verification failures.</li>
+        </ul>
+        <h3>Backpressure</h3>
+        <p>Les brokers bornent la mémoire, le nombre de requests groupées, la taille des pages et le temps d’attente. Le journal peut refuser temporairement des writes avant de saturer l’object store. Les caches ne doivent pas masquer une surcharge durable.</p>
+        <h3>Évolution de format</h3>
+        <p>Chaque objet applicatif porte un format canonique et une version. Les IDs sont calculés sur l’encodage canonique complet et domain-separated. Une root ne référence que des formats lisibles par le service qui la publie.</p>
+      </section>
+
+      <section id="api">
+        <h2>20. Vue d’ensemble de l’API publique</h2>
+        <pre><code>// Core
+ImmutableObjects::{put, read, stat}
+ObjectAdmin::{list_candidates, delete} // privileged
+RootRegister::{read, compare_exchange}
+
+// Optional object capabilities
+RawRanges::read_range
+ChunkedObjects::read_chunk
+
+// Reusable protocols
+Journal::{create_stream, issue_request, append, snapshot, scan, resolve, lag}
+JournalMaintenance::{install_checkpoint, trim_before}
+WorkQueue::{enqueue, claim, heartbeat, ack}
+WorkerRuntime::run
+JobHandler::run
+RetentionEpochs::{enter, renew, leave, safe_before}
+GcCoordinator::{protect, begin_sweep, close_sweep, complete_sweep}
+GcAwarePublisher::compare_exchange
+
+// Cache
+CacheStack::read
+CacheStack::prefetch
+CacheStore::{get, insert, remove, usage}
+LoadPolicy::plan
+AdmissionPolicy::admit
+EvictionPolicy::{record, victims}</code></pre>
+        <h3>Erreurs publiques importantes</h3>
+        <pre><code>enum RootError {
+    Unavailable,
+    ContractViolation,
+}
+
+enum ObjectError {
+    Missing(ObjectId),
+    Corrupt(ObjectId),
+    UnsupportedFormat(ObjectFormat),
+    Unavailable,
+}
+
+enum JournalError {
+    RequestIdReusedWithDifferentPayload,
+    RequestExpired,
+    SnapshotExpired,
+    CorruptChain,
+    Unavailable,
+}</code></pre>
+        <p>Les erreurs distinguent indisponibilité, corruption, absence et outcome ambigu. Elles ne compressent pas ces états sous un unique <code>StorageError</code>.</p>
+        <h3>Contrats de support</h3>
+        <ul>
+          <li><code>ByteStream</code> est un stream async borné par la longueur annoncée; <code>put</code> hash les bytes canoniques pendant l’upload.</li>
+          <li><code>SmallBytes</code> est borné à 4 KiB par défaut et rejeté avant l’appel backend si trop grand.</li>
+          <li><code>DurabilityDomainId</code> est résolu par configuration vers un contrat opérationnel documenté; les capacités du backend sont interrogées au démarrage.</li>
+          <li>Les deadlines de déduplication utilisent l’horloge autoritative du service journal, sont plafonnées par configuration et ne dépendent pas de l’horloge du client.</li>
+          <li>Les handles publics sont liés à un <code>StorageScope</code>; un backend doit refuser toute référence croisant tenant ou encryption domain.</li>
+        </ul>
+      </section>
+
+      <section id="decisions">
+        <h2>21. Registre des décisions</h2>
+        <table>
+          <thead><tr><th>Décision</th><th>Raison</th></tr></thead>
+          <tbody>
+            <tr><td>Core = immutable objects + root CAS</td><td>Seul invariant véritablement commun à Git et vector</td></tr>
+            <tr><td>Journal optionnel officiel</td><td>Nécessaire pour rendre l’ingestion vectorielle sûre et simple</td></tr>
+            <tr><td>Queue hors chemin durable</td><td>Une notification perdue ne doit pas perdre un write</td></tr>
+            <tr><td>Worker runtime partagé, algorithmes applicatifs</td><td>Partager l’exécution at-least-once sans masquer la validité métier</td></tr>
+            <tr><td>Pas de Materializer générique</td><td>Restore Git et overlay vectoriel ont des invariants différents</td></tr>
+            <tr><td>Lease non autoritatif par défaut</td><td>Le CAS assure la sécurité sans horloge</td></tr>
+            <tr><td>Ranges brutes séparées des chunks vérifiés</td><td>Un hash plat ne prouve pas une range</td></tr>
+            <tr><td>Cache policy séparée du cache storage</td><td>Modifier load ou eviction sans réécrire les tiers</td></tr>
+            <tr><td>Roots mutables hors object cache</td><td>Préserver la sémantique des lectures fortes</td></tr>
+            <tr><td>GC applicatif sur mécanismes communs</td><td>La reachability n’est pas générique</td></tr>
+            <tr><td>Failover inter-région hors core</td><td>Exige une autorité et un RPO explicites</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Critère de validation du projet</h3>
+        <p>La librairie mérite d’exister si Origin peut implémenter push/fetch/repack sans hooks Git dans le core, et si le moteur vectoriel peut remplacer son pipeline WAL/queue actuel par <code>Journal</code> sans introduire de hooks vectoriels. Toute primitive qui ne réduit pas le code ou ne centralise pas un invariant partagé doit rester applicative.</p>
+      </section>
+
+      <section id="references">
+        <h2>22. Références</h2>
+        <ul>
+          <li><a href="https://turbopuffer.com/docs/architecture">turbopuffer architecture</a> : object storage durable, query/indexing nodes et cache hierarchy.</li>
+          <li><a href="https://turbopuffer.com/docs/guarantees">turbopuffer guarantees</a> : durabilité, consistency modes et strong reads.</li>
+          <li><a href="https://turbopuffer.com/blog/object-storage-queue">Building a queue on object storage</a> : broker, CAS, group commit et leases.</li>
+          <li><a href="https://cursor.com/changelog/origin-code-hosting">Cursor Origin code hosting</a> : comportement public du produit, sans hypothèse sur son stockage interne.</li>
+          <li><code>/Users/tom.darmon/dev/turbo-vector</code> : implémentation locale auditée, notamment <code>rust/crates/storage</code>, <code>rust/crates/queue</code> et <code>rust/crates/api</code>.</li>
+        </ul>
+      </section>
+
+      <footer>
+        <p>Sources de conception : documentation publique turbopuffer sur l’architecture, la queue object-storage et les garanties; documentation publique Cursor Origin uniquement pour les comportements exposés; audit local du repository <code>turbo-vector</code>; invariants des protocoles Git receive-pack/upload-pack.</p>
+        <p>Fin de RFC 0001.</p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

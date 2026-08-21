@@ -1,2 +1,25 @@
-# durable
-# durable
+# durable monorepo
+
+This repository is organized for two layers:
+
+- `durable/`: reusable Rust durable-storage substrate.
+- `origin/`: future Origin-like application layer built on top of `durable`.
+
+The durable library is implemented and tested first. Origin is intentionally only
+context and planning material right now; implementation should start in a new
+goal.
+
+## Commands
+
+From the repository root:
+
+- `make check`: run durable formatting, clippy, and normal tests.
+- `make test`: run durable normal tests.
+- `make integration-up`: start local RustFS for durable integration tests.
+- `make integration-test`: run durable RustFS backend conformance plus full-stack
+  e2e tests.
+- `make integration-down`: stop local RustFS.
+- `make clean-local`: remove local RustFS volumes and durable build artifacts.
+
+Normal tests do not require RustFS. RustFS-backed tests are ignored in the normal
+suite and run through `make integration-test`.

@@ -1,0 +1,38 @@
+services:
+  rustfs:
+    image: rustfs/rustfs@sha256:41fe89380f4120a337790c02af192c3fe7bb55c3edc2e6e9357b487b47c6ab21
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-durable}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-durable-secret}
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - rustfs-data:/data
+
+  rustfs-init:
+    image: amazon/aws-cli:2.17.57
+    restart: "no"
+    depends_on:
+      - rustfs
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-durable}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-durable-secret}
+      AWS_DEFAULT_REGION: us-east-1
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-durable-dev}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        set -eu
+        until aws s3api list-buckets --endpoint-url http://rustfs:9000 >/dev/null 2>&1; do
+          sleep 1
+        done
+        if ! aws s3api head-bucket --bucket "$$RUSTFS_BUCKET" --endpoint-url http://rustfs:9000 >/dev/null 2>&1; then
+          aws s3 mb "s3://$$RUSTFS_BUCKET" --endpoint-url http://rustfs:9000
+        fi
+
+volumes:
+  rustfs-data:
