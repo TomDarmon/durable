@@ -93,12 +93,18 @@ pub fn http_get(address: &str, path: &str) -> Result<HttpResponse, Box<dyn Error
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
     let status = parse_http_status(&response)?;
-    let body = response
+    let (headers, raw_body) = response
         .split_once("\r\n\r\n")
-        .map(|(_, body)| body)
-        .or_else(|| response.split_once("\n\n").map(|(_, body)| body))
-        .unwrap_or_default()
-        .to_string();
+        .or_else(|| response.split_once("\n\n"))
+        .unwrap_or((&response, ""));
+    let body = if headers.lines().any(|line| {
+        let line = line.to_ascii_lowercase();
+        line.starts_with("transfer-encoding:") && line.contains("chunked")
+    }) {
+        decode_chunked_body(raw_body)?
+    } else {
+        raw_body.to_string()
+    };
     Ok(HttpResponse { status, body })
 }
 
@@ -113,6 +119,40 @@ fn parse_http_status(response: &str) -> Result<u16, Box<dyn Error>> {
         .ok_or_else(|| format!("HTTP status line had no code: {status_line}"))?
         .parse()?;
     Ok(code)
+}
+
+fn decode_chunked_body(raw_body: &str) -> Result<String, Box<dyn Error>> {
+    let mut rest = raw_body.as_bytes();
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = rest
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .or_else(|| rest.iter().position(|byte| *byte == b'\n'))
+            .ok_or("chunked body is missing a chunk size")?;
+        let line = std::str::from_utf8(&rest[..line_end])?;
+        let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16)?;
+        let line_break_len = if rest.get(line_end) == Some(&b'\r') {
+            2
+        } else {
+            1
+        };
+        rest = &rest[line_end + line_break_len..];
+        if size == 0 {
+            break;
+        }
+        if rest.len() < size {
+            return Err("chunked body ended before the declared chunk size".into());
+        }
+        decoded.extend_from_slice(&rest[..size]);
+        rest = &rest[size..];
+        if rest.starts_with(b"\r\n") {
+            rest = &rest[2..];
+        } else if rest.starts_with(b"\n") {
+            rest = &rest[1..];
+        }
+    }
+    Ok(String::from_utf8(decoded)?)
 }
 
 pub fn git<I, S>(cwd: &Path, args: I) -> Result<(), Box<dyn Error>>

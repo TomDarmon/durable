@@ -213,7 +213,7 @@ where
             debug!("repository catalog is empty");
             return Ok(RepositoryCatalog::default());
         };
-        let catalog: RepositoryCatalog = serde_json::from_slice(root.value())?;
+        let catalog = self.load_catalog(&root).await?;
         debug!(
             repositories = catalog.repositories.len(),
             "read repository catalog"
@@ -234,18 +234,19 @@ where
                 .map_or(ExpectedRevision::Missing, |root| {
                     ExpectedRevision::Exact(root.revision())
                 });
-            let mut catalog = current_root
-                .as_ref()
-                .map(|root| serde_json::from_slice::<RepositoryCatalog>(root.value()))
-                .transpose()?
-                .unwrap_or_default();
+            let mut catalog = if let Some(root) = current_root.as_ref() {
+                self.load_catalog(root).await?
+            } else {
+                RepositoryCatalog::default()
+            };
             if catalog.repositories.contains(&entry) {
                 debug!(tenant, repo, "repository already present in catalog");
                 return Ok(());
             }
             catalog.repositories.push(entry.clone());
             catalog.repositories.sort();
-            let value = serde_json::to_vec(&catalog)?;
+            let catalog_ref = self.put_catalog(&catalog).await?;
+            let value = serde_json::to_vec(&catalog_ref)?;
             match self
                 .storage
                 .compare_exchange(&self.root_name, expected, value)
@@ -275,6 +276,26 @@ where
             repo, "repository catalog registration retries exhausted"
         );
         Err(OriginError::Conflict)
+    }
+
+    async fn load_catalog(&self, root: &RootState) -> Result<RepositoryCatalog> {
+        match serde_json::from_slice::<DurableObjectRef>(root.value()) {
+            Ok(catalog_ref) => {
+                let bytes = ImmutableObjects::read(self.storage.as_ref(), &catalog_ref).await?;
+                Ok(serde_json::from_slice(&bytes)?)
+            }
+            Err(_) => Ok(serde_json::from_slice(root.value())?),
+        }
+    }
+
+    async fn put_catalog(&self, catalog: &RepositoryCatalog) -> Result<DurableObjectRef> {
+        let bytes = serde_json::to_vec(catalog)?;
+        let format = ObjectFormat::Custom("origin.repository.catalog.v1".into());
+        let id = compute_object_id(&format, &bytes);
+        Ok(self
+            .storage
+            .put(id, format, &bytes, Durability::BackendDefault)
+            .await?)
     }
 }
 
@@ -600,6 +621,27 @@ pub async fn serve_http_with_cache_dir(
     serve_http_with_cache_dir_and_guard(listener, config, cache_root.into(), None).await
 }
 
+/// Runs the read-only repository browser API on the supplied listener.
+pub async fn serve_browser_api(listener: TcpListener, config: s3::S3BackendConfig) -> Result<()> {
+    let cache_temp = tempfile::tempdir()?;
+    serve_browser_api_with_cache_dir_and_guard(
+        listener,
+        config,
+        cache_temp.path().to_path_buf(),
+        Some(cache_temp),
+    )
+    .await
+}
+
+/// Runs the read-only repository browser API using a persistent local cache.
+pub async fn serve_browser_api_with_cache_dir(
+    listener: TcpListener,
+    config: s3::S3BackendConfig,
+    cache_root: impl Into<PathBuf>,
+) -> Result<()> {
+    serve_browser_api_with_cache_dir_and_guard(listener, config, cache_root.into(), None).await
+}
+
 async fn serve_http_with_cache_dir_and_guard(
     listener: TcpListener,
     config: s3::S3BackendConfig,
@@ -611,6 +653,40 @@ async fn serve_http_with_cache_dir_and_guard(
         address = %listener.local_addr().map_err(|error| OriginError::Http(error.to_string()))?,
         cache_root = %cache_root.display(),
         "serving origin http"
+    );
+    let state = Arc::new(HttpState {
+        cache_root,
+        _cache_temp: cache_temp,
+        config,
+        repositories: Mutex::new(HashMap::new()),
+    });
+    let app = axum::Router::new()
+        .route("/healthz", axum::routing::get(healthz))
+        .route(
+            "/{tenant}/{repo}/{*git_path}",
+            axum::routing::get(git_http).post(git_http),
+        )
+        .layer(axum::middleware::from_fn(log_request))
+        .with_state(state);
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|error| OriginError::Http(error.to_string()))
+}
+
+async fn serve_browser_api_with_cache_dir_and_guard(
+    listener: TcpListener,
+    config: s3::S3BackendConfig,
+    cache_root: PathBuf,
+    cache_temp: Option<tempfile::TempDir>,
+) -> Result<()> {
+    fs::create_dir_all(&cache_root)?;
+    info!(
+        address = %listener.local_addr().map_err(|error| OriginError::Http(error.to_string()))?,
+        cache_root = %cache_root.display(),
+        "serving origin browser api"
     );
     let state = Arc::new(HttpState {
         cache_root,
@@ -632,10 +708,6 @@ async fn serve_http_with_cache_dir_and_guard(
         .route(
             "/api/repos/{tenant}/{repo}/blob",
             axum::routing::get(api_blob),
-        )
-        .route(
-            "/{tenant}/{repo}/{*git_path}",
-            axum::routing::get(git_http).post(git_http),
         )
         .layer(axum::middleware::from_fn(log_request))
         .with_state(state);
@@ -1578,6 +1650,42 @@ mod tests {
 
         assert!(first.current_publication().await.unwrap().is_some());
         assert!(second.current_publication().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn catalog_root_stays_small_when_many_repositories_are_registered() {
+        let backend = Arc::new(InMemoryBackend::new());
+        let storage = Arc::new(ScopedStorage::new(
+            StorageScope::new(
+                TenantId::new(CATALOG_TENANT),
+                DatasetId::new(CATALOG_DATASET),
+                EncryptionDomainId::new(CATALOG_ENCRYPTION_DOMAIN),
+            ),
+            backend,
+        ));
+        let catalog = OriginCatalog::new(storage.clone());
+
+        for index in 0..150 {
+            catalog
+                .register("tenant", &format!("repo-{index:04}"))
+                .await
+                .unwrap();
+        }
+
+        let read = catalog.read().await.unwrap();
+        assert_eq!(read.repositories.len(), 150);
+        let root = RootRegister::read(
+            storage.as_ref(),
+            &RootName::new("origin.repository.catalog.v1"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            root.value().len() < 1024,
+            "catalog root should contain a compact durable object ref"
+        );
+        assert!(serde_json::from_slice::<DurableObjectRef>(root.value()).is_ok());
     }
 
     #[tokio::test]

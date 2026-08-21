@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { createRoot } from "react-dom/client";
 import {
   ChevronRight,
   FileText,
@@ -8,27 +7,69 @@ import {
   RefreshCw,
   Server,
 } from "lucide-react";
-import "./styles.css";
+import type { GitRef, Repository } from "../server/originBackend";
+import { trpc } from "../utils/trpc";
 
-const api = async (path) => {
-  const response = await fetch(path);
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `HTTP ${response.status}`);
-  }
-  return response.json();
-};
+const emptyRepository: Repository = { tenant: "", name: "" };
 
-function App() {
-  const [repositories, setRepositories] = useState([]);
-  const [selectedRepo, setSelectedRepo] = useState(null);
-  const [refs, setRefs] = useState([]);
+function defaultRef(refs: GitRef[]): GitRef | null {
+  return (
+    refs.find((ref) => ref.name === "refs/heads/main") ??
+    refs.find((ref) => ref.name.startsWith("refs/heads/")) ??
+    refs[0] ??
+    null
+  );
+}
+
+export default function Home() {
+  const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [selectedRef, setSelectedRef] = useState("");
   const [path, setPath] = useState("");
-  const [entries, setEntries] = useState([]);
-  const [blob, setBlob] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [blobPath, setBlobPath] = useState("");
+
+  const repositoriesQuery = trpc.repositories.list.useQuery(undefined, {
+    staleTime: 2_000,
+  });
+  const refsQuery = trpc.repositories.refs.useQuery(selectedRepo ?? emptyRepository, {
+    enabled: Boolean(selectedRepo),
+  });
+  const treeQuery = trpc.repositories.tree.useQuery(
+    selectedRepo && selectedRef
+      ? {
+          ...selectedRepo,
+          reference: selectedRef,
+          path,
+        }
+      : {
+          ...emptyRepository,
+          reference: "",
+          path: "",
+        },
+    {
+      enabled: Boolean(selectedRepo && selectedRef),
+    },
+  );
+  const blobQuery = trpc.repositories.blob.useQuery(
+    selectedRepo && selectedRef && blobPath
+      ? {
+          ...selectedRepo,
+          reference: selectedRef,
+          path: blobPath,
+        }
+      : {
+          ...emptyRepository,
+          reference: "",
+          path: "",
+        },
+    {
+      enabled: Boolean(selectedRepo && selectedRef && blobPath),
+    },
+  );
+
+  const repositories = repositoriesQuery.data?.repositories ?? [];
+  const refs = refsQuery.data?.refs ?? [];
+  const entries = treeQuery.data?.entries ?? [];
+  const blob = blobQuery.data ?? null;
 
   const selectedRepoKey = selectedRepo
     ? `${selectedRepo.tenant}/${selectedRepo.name}`
@@ -39,89 +80,48 @@ function App() {
     [refs],
   );
 
-  const loadRepositories = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await api("/api/repos");
-      setRepositories(data.repositories ?? []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    if (!selectedRepo) return;
+    const nextDefault = defaultRef(refs);
+    if (!nextDefault) {
+      setSelectedRef("");
+      return;
     }
-  };
+    if (!refs.some((ref) => ref.name === selectedRef)) {
+      setSelectedRef(nextDefault.name);
+      setPath("");
+      setBlobPath("");
+    }
+  }, [refs, selectedRef, selectedRepo]);
 
-  const openRepository = async (repo) => {
+  const openRepository = (repo: Repository) => {
     setSelectedRepo(repo);
-    setRefs([]);
     setSelectedRef("");
     setPath("");
-    setEntries([]);
-    setBlob(null);
-    setLoading(true);
-    setError("");
-    try {
-      const data = await api(`/api/repos/${repo.tenant}/${repo.name}/refs`);
-      const nextRefs = data.refs ?? [];
-      setRefs(nextRefs);
-      const defaultRef =
-        nextRefs.find((ref) => ref.name === "refs/heads/main") ??
-        nextRefs.find((ref) => ref.name.startsWith("refs/heads/")) ??
-        nextRefs[0];
-      if (defaultRef) {
-        setSelectedRef(defaultRef.name);
-        await openTree(repo, defaultRef.name, "");
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    setBlobPath("");
   };
 
-  const openTree = async (repo, reference, nextPath) => {
-    setLoading(true);
-    setError("");
-    try {
-      const query = new URLSearchParams({ ref: reference });
-      if (nextPath) query.set("path", nextPath);
-      const data = await api(
-        `/api/repos/${repo.tenant}/${repo.name}/tree?${query.toString()}`,
-      );
-      setPath(data.path ?? "");
-      setEntries(data.entries ?? []);
-      setBlob(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  const openTree = (nextPath: string) => {
+    setPath(nextPath);
+    setBlobPath("");
   };
 
-  const openBlob = async (entry) => {
-    if (!selectedRepo || !selectedRef) return;
-    setLoading(true);
-    setError("");
-    try {
-      const query = new URLSearchParams({
-        ref: selectedRef,
-        path: entry.path,
-      });
-      const data = await api(
-        `/api/repos/${selectedRepo.tenant}/${selectedRepo.name}/blob?${query.toString()}`,
-      );
-      setBlob(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  const refreshRepositories = async () => {
+    await repositoriesQuery.refetch();
   };
 
-  useEffect(() => {
-    loadRepositories();
-  }, []);
+  const loading =
+    repositoriesQuery.isFetching ||
+    refsQuery.isFetching ||
+    treeQuery.isFetching ||
+    blobQuery.isFetching;
+
+  const error =
+    repositoriesQuery.error?.message ||
+    refsQuery.error?.message ||
+    treeQuery.error?.message ||
+    blobQuery.error?.message ||
+    "";
 
   const breadcrumbs = path ? path.split("/") : [];
 
@@ -136,7 +136,7 @@ function App() {
             type="button"
             aria-label="Refresh repositories"
             title="Refresh repositories"
-            onClick={loadRepositories}
+            onClick={refreshRepositories}
           >
             <RefreshCw size={16} />
           </button>
@@ -156,7 +156,9 @@ function App() {
               </button>
             );
           })}
-          {!repositories.length && <p className="muted">No repositories yet.</p>}
+          {!repositories.length && !repositoriesQuery.isFetching && (
+            <p className="muted">No repositories yet.</p>
+          )}
         </div>
       </aside>
 
@@ -172,9 +174,9 @@ function App() {
               <select
                 value={selectedRef}
                 onChange={(event) => {
-                  const nextRef = event.target.value;
-                  setSelectedRef(nextRef);
-                  openTree(selectedRepo, nextRef, "");
+                  setSelectedRef(event.target.value);
+                  setPath("");
+                  setBlobPath("");
                 }}
               >
                 {branchRefs.map((ref) => (
@@ -200,10 +202,7 @@ function App() {
         {selectedRepo && selectedRef && (
           <>
             <nav className="breadcrumbs" aria-label="Path">
-              <button
-                type="button"
-                onClick={() => openTree(selectedRepo, selectedRef, "")}
-              >
+              <button type="button" onClick={() => openTree("")}>
                 {selectedRepo.name}
               </button>
               {breadcrumbs.map((part, index) => {
@@ -211,10 +210,7 @@ function App() {
                 return (
                   <React.Fragment key={nextPath}>
                     <ChevronRight size={14} />
-                    <button
-                      type="button"
-                      onClick={() => openTree(selectedRepo, selectedRef, nextPath)}
-                    >
+                    <button type="button" onClick={() => openTree(nextPath)}>
                       {part}
                     </button>
                   </React.Fragment>
@@ -231,8 +227,8 @@ function App() {
                     type="button"
                     onClick={() =>
                       entry.kind === "tree"
-                        ? openTree(selectedRepo, selectedRef, entry.path)
-                        : openBlob(entry)
+                        ? openTree(entry.path)
+                        : setBlobPath(entry.path)
                     }
                   >
                     {entry.kind === "tree" ? (
@@ -244,7 +240,9 @@ function App() {
                     <small>{entry.size == null ? "" : `${entry.size} B`}</small>
                   </button>
                 ))}
-                {!entries.length && <p className="muted">Empty tree.</p>}
+                {!entries.length && !treeQuery.isFetching && (
+                  <p className="muted">Empty tree.</p>
+                )}
               </section>
 
               <section className="blob-panel">
@@ -267,5 +265,3 @@ function App() {
     </main>
   );
 }
-
-createRoot(document.getElementById("root")).render(<App />);

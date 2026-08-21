@@ -70,12 +70,33 @@ services:
     ports:
       - "9202:9200"
 
+  origin-ui-api:
+    build:
+      context: ..
+      dockerfile: origin/Dockerfile
+    command: ["/app/origin/target/release/origin-ui-api"]
+    depends_on:
+      - rustfs
+      - rustfs-init
+    environment:
+      ORIGIN_UI_API_BIND: 0.0.0.0:9210
+      ORIGIN_UI_API_CACHE_DIR: /var/lib/origin-ui-api/cache
+      RUST_LOG: ${ORIGIN_UI_API_RUST_LOG:-origin=info,origin_ui_api=info}
+      DURABLE_RUSTFS_ENDPOINT: http://rustfs:9000
+      DURABLE_RUSTFS_BUCKET: ${RUSTFS_BUCKET:-origin-dev}
+      DURABLE_RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-origin}
+      DURABLE_RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-origin-secret}
+    ports:
+      - "9210:9210"
+
   origin-ui:
     build:
       context: browser
       dockerfile: Dockerfile
     depends_on:
-      - origin
+      - origin-ui-api
+    environment:
+      ORIGIN_UI_BACKEND_URL: http://origin-ui-api:9210
     ports:
       - "9300:9300"
 

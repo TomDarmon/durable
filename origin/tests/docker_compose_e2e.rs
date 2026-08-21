@@ -3,8 +3,8 @@ mod support;
 use std::{error::Error, thread};
 use support::{
     assert_container_cache_marker, create_client_with_initial_commit, docker_compose, git,
-    git_output, git_result, git_stdout, http_status, path_str, wait_for_remote, write_commit,
-    write_commit_push, DOCKER_COMPOSE_ORIGIN_LOCK,
+    git_output, git_result, git_stdout, http_get, http_status, path_str, wait_for_remote,
+    write_commit, write_commit_push, DOCKER_COMPOSE_ORIGIN_LOCK,
 };
 
 #[tokio::test]
@@ -14,6 +14,7 @@ async fn docker_compose_origin_services_report_health() -> Result<(), Box<dyn Er
 
     assert_eq!(http_status("127.0.0.1:9200", "/healthz")?, 204);
     assert_eq!(http_status("127.0.0.1:9202", "/healthz")?, 204);
+    assert_eq!(http_status("127.0.0.1:9210", "/healthz")?, 204);
 
     Ok(())
 }
@@ -24,6 +25,33 @@ async fn docker_compose_origin_browser_serves_react_app() -> Result<(), Box<dyn 
     let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
 
     assert_eq!(http_status("127.0.0.1:9300", "/")?, 200);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires `make e2e-up`"]
+async fn docker_compose_origin_ui_trpc_lists_pushed_repository() -> Result<(), Box<dyn Error>> {
+    let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
+    let temp = tempfile::tempdir()?;
+    let client = temp.path().join("client");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let remote_url = format!("http://127.0.0.1:9200/tenant/{repo_name}.git");
+
+    create_client_with_initial_commit(temp.path(), &client, &remote_url)?;
+    git(&client, ["push", "-u", "origin", "main"])?;
+
+    let response = http_get(
+        "127.0.0.1:9300",
+        "/api/trpc/repositories.list?input=%7B%22json%22%3Anull%7D",
+    )?;
+    assert_eq!(response.status, 200, "unexpected body: {}", response.body);
+    let payload: serde_json::Value = serde_json::from_str(&response.body)?;
+    assert!(payload["result"]["data"]["repositories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|repo| { repo["tenant"] == "tenant" && repo["name"] == repo_name.as_str() }));
 
     Ok(())
 }

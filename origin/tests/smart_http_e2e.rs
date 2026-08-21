@@ -1,6 +1,8 @@
 mod support;
 
-use origin::{local_rustfs_config, local_rustfs_repository, serve_http, RepositoryScope};
+use origin::{
+    local_rustfs_config, local_rustfs_repository, serve_browser_api, serve_http, RepositoryScope,
+};
 use serde_json::Value;
 use std::error::Error;
 use support::{
@@ -49,27 +51,24 @@ async fn smart_http_server_accepts_push_and_serves_clone() -> Result<(), Box<dyn
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires `make e2e-up`"]
-async fn smart_http_api_browses_published_repository() -> Result<(), Box<dyn Error>> {
+async fn browser_api_browses_repository_published_by_smart_http() -> Result<(), Box<dyn Error>> {
     let temp = tempfile::tempdir()?;
     let client = temp.path().join("client");
     let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
     let (server, remote_url) = spawn_http_origin(&repo_name).await?;
-    let address = remote_url
-        .strip_prefix("http://")
-        .and_then(|url| url.split('/').next())
-        .ok_or("remote URL did not include an address")?;
+    let (api_server, api_address) = spawn_browser_api().await?;
 
     create_client_with_initial_commit(temp.path(), &client, &remote_url)?;
     git(&client, ["push", "-u", "origin", "main"])?;
 
-    let repos = get_json(address, "/api/repos")?;
+    let repos = get_json(&api_address, "/api/repos")?;
     assert!(repos["repositories"]
         .as_array()
         .unwrap()
         .iter()
         .any(|repo| { repo["tenant"] == "tenant" && repo["name"] == repo_name.as_str() }));
 
-    let refs = get_json(address, &format!("/api/repos/tenant/{repo_name}/refs"))?;
+    let refs = get_json(&api_address, &format!("/api/repos/tenant/{repo_name}/refs"))?;
     assert!(refs["refs"]
         .as_array()
         .unwrap()
@@ -77,7 +76,7 @@ async fn smart_http_api_browses_published_repository() -> Result<(), Box<dyn Err
         .any(|git_ref| git_ref["name"] == "refs/heads/main"));
 
     let tree = get_json(
-        address,
+        &api_address,
         &format!("/api/repos/tenant/{repo_name}/tree?ref=refs/heads/main"),
     )?;
     assert!(tree["entries"]
@@ -87,12 +86,13 @@ async fn smart_http_api_browses_published_repository() -> Result<(), Box<dyn Err
         .any(|entry| { entry["name"] == "README.md" && entry["kind"] == "blob" }));
 
     let blob = get_json(
-        address,
+        &api_address,
         &format!("/api/repos/tenant/{repo_name}/blob?ref=refs/heads/main&path=README.md"),
     )?;
     assert_eq!(blob["content"], "hello from origin\n");
 
     server.abort();
+    api_server.abort();
     Ok(())
 }
 
@@ -196,6 +196,17 @@ async fn spawn_http_origin(
             .expect("origin http server failed");
     });
     Ok((server, format!("http://{address}/tenant/{repo_name}.git")))
+}
+
+async fn spawn_browser_api() -> Result<(tokio::task::JoinHandle<()>, String), Box<dyn Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        serve_browser_api(listener, local_rustfs_config())
+            .await
+            .expect("origin browser api failed");
+    });
+    Ok((server, address.to_string()))
 }
 
 fn get_json(address: &str, path: &str) -> Result<Value, Box<dyn Error>> {

@@ -21,16 +21,18 @@ serving cache.
 - `make e2e-down`: stop the local stack.
 
 The compose stack exposes Git HTTP servers at `http://127.0.0.1:9200` and
-`http://127.0.0.1:9202`, plus a small repository browser at
-`http://127.0.0.1:9300`. Both Origin services share the same RustFS bucket and
-keep discardable local bare-repository caches under `/var/lib/origin/cache`.
-Each Origin service also exposes `GET /healthz`, returning `204 No Content`
-when the HTTP process is ready to accept Git traffic.
+`http://127.0.0.1:9202`, a read-only browser API at
+`http://127.0.0.1:9210`, and a Next.js/tRPC repository browser at
+`http://127.0.0.1:9300`. The Git services share the same RustFS bucket and keep
+discardable local bare-repository caches under `/var/lib/origin/cache`. The
+browser API has its own discardable cache under `/var/lib/origin-ui-api/cache`.
+Each service exposes `GET /healthz`, returning `204 No Content` when ready.
 
 ## Logs
 
-Origin logs request timing and repository events with `tracing`. In the compose
-stack, follow the primary server with:
+Origin logs request timing and repository events with `tracing`. Git traffic and
+UI browsing are split across services so their logs can be followed separately.
+In the compose stack, follow the primary Git server with:
 
 ```sh
 docker compose -f origin/docker-compose.yml logs -f origin
@@ -42,18 +44,31 @@ Use the alternate service name to watch the second server:
 docker compose -f origin/docker-compose.yml logs -f origin-alt
 ```
 
-The default filter is `origin=info`. For cache-hit and CAS-retry detail, restart
-the stack with:
+Follow browser read-model calls with:
 
 ```sh
-ORIGIN_RUST_LOG=origin=debug make origin-e2e-up
+docker compose -f origin/docker-compose.yml logs -f origin-ui-api
+```
+
+Follow the Next.js/tRPC app with:
+
+```sh
+docker compose -f origin/docker-compose.yml logs -f origin-ui
+```
+
+The default Git server filter is `origin=info,origin_server=info`; the default
+browser API filter is `origin=info,origin_ui_api=info`. For cache-hit and
+CAS-retry detail, restart the stack with:
+
+```sh
+ORIGIN_RUST_LOG=origin=debug ORIGIN_UI_API_RUST_LOG=origin=debug,origin_ui_api=info make e2e-up
 ```
 
 The e2e tests are split by layer:
 
 - `tests/durable_repository_e2e.rs`: durable publication/materialization without HTTP.
-- `tests/smart_http_e2e.rs`: in-process smart HTTP behavior with real Git clients.
-- `tests/docker_compose_e2e.rs`: Docker/RustFS service behavior, browser smoke, restarts, cache, and multi-service conflicts.
+- `tests/smart_http_e2e.rs`: in-process Smart HTTP behavior with real Git clients, plus browser API reads from data published through Smart HTTP.
+- `tests/docker_compose_e2e.rs`: Docker/RustFS service behavior, browser/UI API smoke, restarts, cache, and multi-service conflicts.
 
 ## Intended V1 Shape
 
