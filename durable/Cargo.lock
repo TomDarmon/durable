@@ -540,6 +540,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cache"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "substrate",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "cc"
 version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -564,6 +578,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "conformance"
+version = "0.1.0"
+dependencies = [
+ "s3",
+ "substrate",
+ "thiserror",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -710,142 +735,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
-name = "durable-cache"
+name = "e2e"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "durable-core",
- "hex",
- "serde",
+ "cache",
+ "journal",
+ "queue",
+ "retention",
+ "s3",
  "serde_json",
- "sha2",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "durable-conformance"
-version = "0.1.0"
-dependencies = [
- "durable-core",
- "durable-s3",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "durable-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "durable-e2e"
-version = "0.1.0"
-dependencies = [
- "durable-cache",
- "durable-core",
- "durable-journal",
- "durable-queue",
- "durable-retention",
- "durable-s3",
- "durable-worker",
- "serde_json",
+ "substrate",
  "tempfile",
  "tokio",
  "uuid",
-]
-
-[[package]]
-name = "durable-journal"
-version = "0.1.0"
-dependencies = [
- "durable-core",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "durable-queue"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "durable-retention"
-version = "0.1.0"
-dependencies = [
- "durable-core",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "durable-s3"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "aws-config",
- "aws-credential-types",
- "aws-runtime",
- "aws-sdk-s3",
- "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-http-client",
- "aws-smithy-observability",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-types",
- "durable-core",
- "serde",
- "serde_json",
- "thiserror",
- "uuid",
-]
-
-[[package]]
-name = "durable-testkit"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "durable-core",
- "durable-journal",
- "rand",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "durable-worker"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "durable-queue",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
+ "worker",
 ]
 
 [[package]]
@@ -1406,6 +1309,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "journal"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "substrate",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1629,6 +1545,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "queue"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1687,6 +1614,16 @@ name = "regex-lite"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
+name = "retention"
+version = "0.1.0"
+dependencies = [
+ "substrate",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "rfc6979"
@@ -1815,6 +1752,30 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "s3"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sdk-s3",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-http-client",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "serde",
+ "serde_json",
+ "substrate",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "schannel"
@@ -2030,6 +1991,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "substrate"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2079,6 +2054,18 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "testkit"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "journal",
+ "rand",
+ "substrate",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -2475,6 +2462,19 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "worker"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "queue",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
 
 [[package]]
 name = "writeable"

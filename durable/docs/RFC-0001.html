@@ -631,7 +631,7 @@ JournalPageHeader {
 
       <section id="workers">
         <h2>11. Worker runtime</h2>
-        <p><code>durable-worker</code> partage la mécanique opérationnelle des workers sans interpréter leur travail. Il gère claim, heartbeat, retry, cancellation, limites de ressources et observabilité. Il ne décide jamais si un index, un packfile ou une compaction est correct.</p>
+        <p><code>worker</code> partage la mécanique opérationnelle des workers sans interpréter leur travail. Il gère claim, heartbeat, retry, cancellation, limites de ressources et observabilité. Il ne décide jamais si un index, un packfile ou une compaction est correct.</p>
 
         <h3>Contrat public</h3>
         <pre><code>pub struct JobContext {
@@ -678,7 +678,7 @@ pub struct WorkerRuntime&lt;Q&gt; {
 
         <h3>Responsabilités applicatives</h3>
         <table>
-          <thead><tr><th>Partagé par durable-worker</th><th>Origin</th><th>Moteur vectoriel</th></tr></thead>
+          <thead><tr><th>Partagé par worker</th><th>Origin</th><th>Moteur vectoriel</th></tr></thead>
           <tbody>
             <tr><td>Claim, heartbeat, retry</td><td>Sélection des repos à repacker</td><td>Sélection des WAL ranges</td></tr>
             <tr><td>Cancellation et budgets</td><td>Reachability Git</td><td>Tombstones et document versions</td></tr>

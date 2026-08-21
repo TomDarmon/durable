@@ -13,7 +13,7 @@
 - Retention iteration 1 implements reader epochs and keeps physical deletion
   disabled.
 - RustFS integration is split into backend conformance and full-stack e2e:
-  conformance proves the S3/RustFS adapter contract, while e2e drives core,
+  conformance proves the S3/RustFS adapter contract, while e2e drives substrate,
   cache, journal, queue, worker, and retention together over RustFS.
 
 ## Deviations

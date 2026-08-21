@@ -86,15 +86,15 @@ durable/
 │   ├── implementation-notes.md
 │   └── limitations.md
 ├── crates/
-│   ├── durable-core/
-│   ├── durable-s3/
-│   ├── durable-cache/
-│   ├── durable-journal/
-│   ├── durable-queue/
-│   ├── durable-worker/
-│   ├── durable-retention/
-│   ├── durable-testkit/
-│   └── durable-conformance/
+│   ├── substrate/
+│   ├── s3/
+│   ├── cache/
+│   ├── journal/
+│   ├── queue/
+│   ├── worker/
+│   ├── retention/
+│   ├── testkit/
+│   └── conformance/
 └── tests/
 
 Do not create empty crates just to match this tree. If a crate is not meaningfully implemented, omit it and explain why.
@@ -118,7 +118,7 @@ If RustFS does not satisfy a required contract, do not fake the guarantee. Docum
 
 Use a pinned RustFS image version if a stable explicit version can be identified. Do not silently rely on `latest` without documenting it.
 
-## Phase 2: durable-core
+## Phase 2: substrate
 
 Implement the smallest public core from the RFC.
 
@@ -164,7 +164,7 @@ Do not add:
 
 ## Phase 3: deterministic model and fault injection
 
-Implement a synchronous deterministic reference model in `durable-testkit`.
+Implement a synchronous deterministic reference model in `testkit`.
 
 Do not implement the model by wrapping the production async code.
 
@@ -191,7 +191,7 @@ Support fault actions including:
 
 Every randomized test must report a reproducible seed and command trace.
 
-## Phase 4: durable-cache
+## Phase 4: cache
 
 Implement a cache stack bound to one immutable `StorageScope`.
 
@@ -235,7 +235,7 @@ A strong root read must always call `RootRegister`.
 
 Do not implement distributed cache coherence.
 
-## Phase 5: durable-journal
+## Phase 5: journal
 
 Implement the journal as immutable pages plus a small CAS head.
 

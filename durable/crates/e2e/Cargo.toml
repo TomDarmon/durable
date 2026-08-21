@@ -1,0 +1,19 @@
+[package]
+name = "e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+cache.workspace = true
+substrate.workspace = true
+journal.workspace = true
+queue.workspace = true
+retention.workspace = true
+s3.workspace = true
+worker.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+uuid.workspace = true

@@ -1,4 +1,4 @@
-.PHONY: check test integration-up integration-test integration-down clean-local
+.PHONY: check test integration-up integration-conformance integration-e2e integration-test integration-down clean-local
 
 check:
 	$(MAKE) -C durable check
@@ -8,6 +8,12 @@ test:
 
 integration-up:
 	$(MAKE) -C durable integration-up
+
+integration-conformance:
+	$(MAKE) -C durable integration-conformance
+
+integration-e2e:
+	$(MAKE) -C durable integration-e2e
 
 integration-test:
 	$(MAKE) -C durable integration-test

@@ -16,8 +16,9 @@ From the repository root:
 - `make check`: run durable formatting, clippy, and normal tests.
 - `make test`: run durable normal tests.
 - `make integration-up`: start local RustFS for durable integration tests.
-- `make integration-test`: run durable RustFS backend conformance plus full-stack
-  e2e tests.
+- `make integration-conformance`: run durable RustFS backend conformance tests.
+- `make integration-e2e`: run durable full-stack e2e tests over RustFS.
+- `make integration-test`: run both integration suites.
 - `make integration-down`: stop local RustFS.
 - `make clean-local`: remove local RustFS volumes and durable build artifacts.
 

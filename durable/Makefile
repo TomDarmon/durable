@@ -3,7 +3,7 @@ RUSTFS_BUCKET ?= durable-dev
 RUSTFS_ACCESS_KEY ?= durable
 RUSTFS_SECRET_KEY ?= durable-secret
 
-.PHONY: check test integration-up integration-test integration-down clean-local
+.PHONY: check test integration-up integration-conformance integration-e2e integration-test integration-down clean-local
 
 check:
 	cargo fmt --all -- --check
@@ -16,17 +16,21 @@ test:
 integration-up:
 	docker compose up -d rustfs rustfs-init
 
-integration-test:
+integration-conformance:
 	DURABLE_RUSTFS_ENDPOINT=$(RUSTFS_ENDPOINT) \
 	DURABLE_RUSTFS_BUCKET=$(RUSTFS_BUCKET) \
 	DURABLE_RUSTFS_ACCESS_KEY=$(RUSTFS_ACCESS_KEY) \
 	DURABLE_RUSTFS_SECRET_KEY=$(RUSTFS_SECRET_KEY) \
-	cargo test -p durable-conformance --test rustfs_integration -- --ignored --nocapture
+	cargo test -p conformance --test rustfs_integration -- --ignored --nocapture
+
+integration-e2e:
 	DURABLE_RUSTFS_ENDPOINT=$(RUSTFS_ENDPOINT) \
 	DURABLE_RUSTFS_BUCKET=$(RUSTFS_BUCKET) \
 	DURABLE_RUSTFS_ACCESS_KEY=$(RUSTFS_ACCESS_KEY) \
 	DURABLE_RUSTFS_SECRET_KEY=$(RUSTFS_SECRET_KEY) \
-	cargo test -p durable-e2e --test rustfs_full_stack -- --ignored --nocapture
+	cargo test -p e2e --tests -- --ignored --nocapture
+
+integration-test: integration-conformance integration-e2e
 
 integration-down:
 	docker compose down

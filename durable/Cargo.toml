@@ -1,15 +1,15 @@
 [workspace]
 members = [
-  "crates/durable-cache",
-  "crates/durable-conformance",
-  "crates/durable-core",
-  "crates/durable-e2e",
-  "crates/durable-journal",
-  "crates/durable-queue",
-  "crates/durable-retention",
-  "crates/durable-s3",
-  "crates/durable-testkit",
-  "crates/durable-worker",
+  "crates/cache",
+  "crates/conformance",
+  "crates/substrate",
+  "crates/e2e",
+  "crates/journal",
+  "crates/queue",
+  "crates/retention",
+  "crates/s3",
+  "crates/testkit",
+  "crates/worker",
 ]
 resolver = "2"
 
@@ -46,13 +46,13 @@ tokio-util = "0.7"
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 
-durable-cache = { path = "crates/durable-cache" }
-durable-conformance = { path = "crates/durable-conformance" }
-durable-core = { path = "crates/durable-core" }
-durable-e2e = { path = "crates/durable-e2e" }
-durable-journal = { path = "crates/durable-journal" }
-durable-queue = { path = "crates/durable-queue" }
-durable-retention = { path = "crates/durable-retention" }
-durable-s3 = { path = "crates/durable-s3" }
-durable-testkit = { path = "crates/durable-testkit" }
-durable-worker = { path = "crates/durable-worker" }
+cache = { path = "crates/cache" }
+conformance = { path = "crates/conformance" }
+substrate = { path = "crates/substrate" }
+e2e = { path = "crates/e2e" }
+journal = { path = "crates/journal" }
+queue = { path = "crates/queue" }
+retention = { path = "crates/retention" }
+s3 = { path = "crates/s3" }
+testkit = { path = "crates/testkit" }
+worker = { path = "crates/worker" }

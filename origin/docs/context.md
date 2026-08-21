@@ -45,6 +45,6 @@ by `../durable`.
 ## Important Constraints
 
 - Do not expose S3 ETags as application revisions.
-- Do not model Git OIDs inside `durable-core`.
+- Do not model Git OIDs inside the durable `substrate` crate.
 - Do not add unsafe GC until durable publication permits and sweep proofs exist.
 - Do not use queue delivery as the source of truth for refs or objects.
