@@ -68,5 +68,14 @@ services:
     ports:
       - "9202:9200"
 
+  origin-ui:
+    build:
+      context: browser
+      dockerfile: Dockerfile
+    depends_on:
+      - origin
+    ports:
+      - "9300:9300"
+
 volumes:
   origin-rustfs-data:

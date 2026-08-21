@@ -20,6 +20,16 @@ async fn docker_compose_origin_services_report_health() -> Result<(), Box<dyn Er
 
 #[tokio::test]
 #[ignore = "requires `make e2e-up`"]
+async fn docker_compose_origin_browser_serves_react_app() -> Result<(), Box<dyn Error>> {
+    let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
+
+    assert_eq!(http_status("127.0.0.1:9300", "/")?, 200);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires `make e2e-up`"]
 async fn docker_compose_origin_service_accepts_push_and_serves_clone() -> Result<(), Box<dyn Error>>
 {
     let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;

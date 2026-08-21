@@ -21,8 +21,9 @@ serving cache.
 - `make e2e-down`: stop the local stack.
 
 The compose stack exposes Git HTTP servers at `http://127.0.0.1:9200` and
-`http://127.0.0.1:9202`. Both services share the same RustFS bucket and keep
-discardable local bare-repository caches under `/var/lib/origin/cache`.
+`http://127.0.0.1:9202`, plus a small repository browser at
+`http://127.0.0.1:9300`. Both Origin services share the same RustFS bucket and
+keep discardable local bare-repository caches under `/var/lib/origin/cache`.
 Each Origin service also exposes `GET /healthz`, returning `204 No Content`
 when the HTTP process is ready to accept Git traffic.
 
@@ -30,7 +31,7 @@ The e2e tests are split by layer:
 
 - `tests/durable_repository_e2e.rs`: durable publication/materialization without HTTP.
 - `tests/smart_http_e2e.rs`: in-process smart HTTP behavior with real Git clients.
-- `tests/docker_compose_e2e.rs`: Docker/RustFS service behavior, restarts, cache, and multi-service conflicts.
+- `tests/docker_compose_e2e.rs`: Docker/RustFS service behavior, browser smoke, restarts, cache, and multi-service conflicts.
 
 ## Intended V1 Shape
 

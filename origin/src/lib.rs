@@ -4,6 +4,7 @@
 //! identity, bare-repository materialization, ref publication, and recovery.
 
 use axum::response::IntoResponse;
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -27,6 +28,9 @@ use walkdir::WalkDir;
 pub type Result<T> = std::result::Result<T, OriginError>;
 
 const CACHE_MARKER_FILE: &str = ".origin-cache-publication";
+const CATALOG_TENANT: &str = "__origin_system";
+const CATALOG_DATASET: &str = "repository-catalog";
+const CATALOG_ENCRYPTION_DOMAIN: &str = "edek";
 
 /// Origin error taxonomy.
 #[derive(Debug, Error)]
@@ -153,6 +157,98 @@ pub struct GitFileEntry {
     pub path: String,
     /// Durable immutable bytes for that path.
     pub object: DurableObjectRef,
+}
+
+/// Durable catalog of repositories known to this Origin deployment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepositoryCatalog {
+    /// Stable format version.
+    pub version: u32,
+    /// Known repositories.
+    pub repositories: Vec<RepositoryCatalogEntry>,
+}
+
+impl Default for RepositoryCatalog {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            repositories: Vec::new(),
+        }
+    }
+}
+
+/// One repository visible through the Origin browser API.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RepositoryCatalogEntry {
+    /// Tenant or organization name.
+    pub tenant: String,
+    /// Repository name without the `.git` suffix.
+    pub name: String,
+}
+
+/// Durable-backed repository catalog.
+#[derive(Clone)]
+pub struct OriginCatalog<B> {
+    storage: Arc<ScopedStorage<B>>,
+    root_name: RootName,
+}
+
+impl<B> OriginCatalog<B>
+where
+    B: RawBackend + 'static,
+{
+    /// Creates a catalog handle over a scope-bound durable store.
+    pub fn new(storage: Arc<ScopedStorage<B>>) -> Self {
+        Self {
+            storage,
+            root_name: RootName::new("origin.repository.catalog.v1"),
+        }
+    }
+
+    /// Reads the current catalog.
+    pub async fn read(&self) -> Result<RepositoryCatalog> {
+        let Some(root) = RootRegister::read(self.storage.as_ref(), &self.root_name).await? else {
+            return Ok(RepositoryCatalog::default());
+        };
+        Ok(serde_json::from_slice(root.value())?)
+    }
+
+    /// Registers a repository if it is not already present.
+    pub async fn register(&self, tenant: &str, repo: &str) -> Result<()> {
+        let entry = RepositoryCatalogEntry {
+            tenant: tenant.to_string(),
+            name: repo.to_string(),
+        };
+        for _ in 0..8 {
+            let current_root = RootRegister::read(self.storage.as_ref(), &self.root_name).await?;
+            let expected = current_root
+                .as_ref()
+                .map_or(ExpectedRevision::Missing, |root| {
+                    ExpectedRevision::Exact(root.revision())
+                });
+            let mut catalog = current_root
+                .as_ref()
+                .map(|root| serde_json::from_slice::<RepositoryCatalog>(root.value()))
+                .transpose()?
+                .unwrap_or_default();
+            if catalog.repositories.contains(&entry) {
+                return Ok(());
+            }
+            catalog.repositories.push(entry.clone());
+            catalog.repositories.sort();
+            let value = serde_json::to_vec(&catalog)?;
+            match self
+                .storage
+                .compare_exchange(&self.root_name, expected, value)
+                .await?
+            {
+                PublishOutcome::Applied(_) => return Ok(()),
+                PublishOutcome::Conflict { .. } => continue,
+                PublishOutcome::OutcomeUnknown => return Err(OriginError::OutcomeUnknown),
+            }
+        }
+        Err(OriginError::Conflict)
+    }
 }
 
 impl<B> OriginRepository<B>
@@ -368,6 +464,11 @@ pub async fn local_rustfs_repository(
     rustfs_repository(scope, local_rustfs_config()).await
 }
 
+/// Builds a local RustFS-backed Origin repository catalog.
+pub async fn local_rustfs_catalog() -> Result<OriginCatalog<s3::S3Backend>> {
+    rustfs_catalog(local_rustfs_config()).await
+}
+
 /// Builds a RustFS/S3-backed Origin repository from an explicit config.
 pub async fn rustfs_repository(
     scope: RepositoryScope,
@@ -376,6 +477,18 @@ pub async fn rustfs_repository(
     let backend = Arc::new(s3::S3Backend::new(config).await?);
     let storage = Arc::new(ScopedStorage::new(scope.storage_scope(), backend));
     Ok(OriginRepository::new(storage))
+}
+
+/// Builds a RustFS/S3-backed Origin repository catalog from an explicit config.
+pub async fn rustfs_catalog(config: s3::S3BackendConfig) -> Result<OriginCatalog<s3::S3Backend>> {
+    let backend = Arc::new(s3::S3Backend::new(config).await?);
+    let scope = StorageScope::new(
+        TenantId::new(CATALOG_TENANT),
+        DatasetId::new(CATALOG_DATASET),
+        EncryptionDomainId::new(CATALOG_ENCRYPTION_DOMAIN),
+    );
+    let storage = Arc::new(ScopedStorage::new(scope, backend));
+    Ok(OriginCatalog::new(storage))
 }
 
 /// Returns local RustFS config, compatible with durable's integration env vars.
@@ -428,6 +541,19 @@ async fn serve_http_with_cache_dir_and_guard(
     });
     let app = axum::Router::new()
         .route("/healthz", axum::routing::get(healthz))
+        .route("/api/repos", axum::routing::get(api_repositories))
+        .route(
+            "/api/repos/{tenant}/{repo}/refs",
+            axum::routing::get(api_refs),
+        )
+        .route(
+            "/api/repos/{tenant}/{repo}/tree",
+            axum::routing::get(api_tree),
+        )
+        .route(
+            "/api/repos/{tenant}/{repo}/blob",
+            axum::routing::get(api_blob),
+        )
         .route(
             "/{tenant}/{repo}/{*git_path}",
             axum::routing::get(git_http).post(git_http),
@@ -443,6 +569,145 @@ async fn serve_http_with_cache_dir_and_guard(
 
 async fn healthz() -> axum::http::StatusCode {
     axum::http::StatusCode::NO_CONTENT
+}
+
+#[derive(Debug, Serialize)]
+struct ApiRepositories {
+    repositories: Vec<RepositoryCatalogEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiRefs {
+    refs: Vec<GitRefEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TreeQuery {
+    #[serde(rename = "ref")]
+    reference: Option<String>,
+    path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiTree {
+    reference: String,
+    path: String,
+    entries: Vec<ApiTreeEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiTreeEntry {
+    name: String,
+    path: String,
+    kind: String,
+    oid: String,
+    size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BlobQuery {
+    #[serde(rename = "ref")]
+    reference: Option<String>,
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiBlob {
+    reference: String,
+    path: String,
+    content: String,
+}
+
+async fn api_repositories(
+    axum::extract::State(state): axum::extract::State<Arc<HttpState>>,
+) -> axum::response::Response {
+    api_result(async move {
+        let catalog = rustfs_catalog(state.config.clone()).await?;
+        let catalog = catalog.read().await?;
+        Ok(Json(ApiRepositories {
+            repositories: catalog.repositories,
+        }))
+    })
+    .await
+}
+
+async fn api_refs(
+    axum::extract::State(state): axum::extract::State<Arc<HttpState>>,
+    axum::extract::Path((tenant, repo)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    api_result(async move {
+        validate_repository_name(&repo)?;
+        let repository = rustfs_repository(
+            RepositoryScope::new(tenant, repo, "edek"),
+            state.config.clone(),
+        )
+        .await?;
+        let publication = repository
+            .current_publication()
+            .await?
+            .ok_or_else(|| OriginError::Http("repository not found".into()))?;
+        Ok(Json(ApiRefs {
+            refs: publication.refs,
+        }))
+    })
+    .await
+}
+
+async fn api_tree(
+    axum::extract::State(state): axum::extract::State<Arc<HttpState>>,
+    axum::extract::Path((tenant, repo)): axum::extract::Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<TreeQuery>,
+) -> axum::response::Response {
+    api_result(async move {
+        let reference = normalize_browser_ref(query.reference.as_deref());
+        let path = normalize_browser_path(query.path.as_deref())?;
+        let bare_repo = materialize_browser_repository(&state, &tenant, &repo).await?;
+        let entries = list_git_tree(&bare_repo, &reference, &path)?;
+        Ok(Json(ApiTree {
+            reference,
+            path,
+            entries,
+        }))
+    })
+    .await
+}
+
+async fn api_blob(
+    axum::extract::State(state): axum::extract::State<Arc<HttpState>>,
+    axum::extract::Path((tenant, repo)): axum::extract::Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<BlobQuery>,
+) -> axum::response::Response {
+    api_result(async move {
+        let reference = normalize_browser_ref(query.reference.as_deref());
+        let path = normalize_browser_path(Some(&query.path))?;
+        let bare_repo = materialize_browser_repository(&state, &tenant, &repo).await?;
+        let content = read_git_blob(&bare_repo, &reference, &path)?;
+        Ok(Json(ApiBlob {
+            reference,
+            path,
+            content,
+        }))
+    })
+    .await
+}
+
+async fn api_result<F, T>(future: F) -> axum::response::Response
+where
+    F: std::future::Future<Output = Result<Json<T>>>,
+    T: Serialize,
+{
+    match future.await {
+        Ok(response) => response.into_response(),
+        Err(error) => {
+            let status = match error {
+                OriginError::UnsafePath(_) => axum::http::StatusCode::NOT_FOUND,
+                OriginError::Conflict => axum::http::StatusCode::CONFLICT,
+                OriginError::Http(_) => axum::http::StatusCode::BAD_REQUEST,
+                _ => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, error.to_string()).into_response()
+        }
+    }
 }
 
 struct HttpState {
@@ -518,10 +783,16 @@ async fn git_http_inner(request: GitHttpRequest) -> Result<axum::response::Respo
         .repo_segment
         .strip_suffix(".git")
         .ok_or_else(|| OriginError::UnsafePath(request.repo_segment.clone()))?;
+    validate_path_segment(&request.tenant)?;
+    validate_repository_name(repo_name)?;
     let repo_lock = request.state.repository_lock(&request.tenant, repo_name);
     let _guard = repo_lock.lock().await;
     let scope = RepositoryScope::new(request.tenant.clone(), repo_name, "edek");
     let repository = rustfs_repository(scope, request.state.config.clone()).await?;
+    rustfs_catalog(request.state.config.clone())
+        .await?
+        .register(&request.tenant, repo_name)
+        .await?;
     let tenant_root = safe_join(&request.state.cache_root, &request.tenant)?;
     fs::create_dir_all(&tenant_root)?;
     let bare_repo = safe_join(&tenant_root, &request.repo_segment)?;
@@ -702,6 +973,171 @@ fn safe_join(base: &Path, relative: &str) -> Result<PathBuf> {
     Ok(base.join(normalized))
 }
 
+fn validate_path_segment(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.starts_with('-')
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains("..")
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(OriginError::UnsafePath(value.into()));
+    }
+    Ok(())
+}
+
+fn validate_repository_name(value: &str) -> Result<()> {
+    validate_path_segment(value)?;
+    if value.ends_with(".git") {
+        return Err(OriginError::UnsafePath(value.into()));
+    }
+    Ok(())
+}
+
+fn normalize_browser_ref(value: Option<&str>) -> String {
+    value
+        .filter(|reference| !reference.trim().is_empty())
+        .unwrap_or("refs/heads/main")
+        .to_string()
+}
+
+fn validate_browser_ref(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.starts_with('-')
+        || value.contains("..")
+        || value.contains(' ')
+        || value.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(OriginError::UnsafePath(value.into()));
+    }
+    Ok(())
+}
+
+fn normalize_browser_path(value: Option<&str>) -> Result<String> {
+    let Some(value) = value.filter(|path| !path.is_empty()) else {
+        return Ok(String::new());
+    };
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err(OriginError::UnsafePath(value.into()));
+    }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(
+                part.to_str()
+                    .ok_or_else(|| OriginError::UnsafePath(value.into()))?,
+            ),
+            _ => return Err(OriginError::UnsafePath(value.into())),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+async fn materialize_browser_repository(
+    state: &HttpState,
+    tenant: &str,
+    repo: &str,
+) -> Result<PathBuf> {
+    validate_path_segment(tenant)?;
+    validate_repository_name(repo)?;
+    let repo_lock = state.repository_lock(tenant, repo);
+    let _guard = repo_lock.lock().await;
+    let repository = rustfs_repository(
+        RepositoryScope::new(tenant.to_string(), repo.to_string(), "edek"),
+        state.config.clone(),
+    )
+    .await?;
+    if repository.current_publication().await?.is_none() {
+        return Err(OriginError::Http("repository not found".into()));
+    }
+    let tenant_root = safe_join(&state.cache_root, tenant)?;
+    fs::create_dir_all(&tenant_root)?;
+    let bare_repo = safe_join(&tenant_root, &format!("{repo}.git"))?;
+    repository
+        .materialize_bare_repository_cached(&bare_repo)
+        .await?;
+    Ok(bare_repo)
+}
+
+fn list_git_tree(repo: &Path, reference: &str, path: &str) -> Result<Vec<ApiTreeEntry>> {
+    validate_browser_ref(reference)?;
+    let treeish = git_treeish(reference, path);
+    let output = git_bytes_output(repo, ["ls-tree", "-z", "-l", &treeish])?;
+    let mut entries = Vec::new();
+    for raw in output.split(|byte| *byte == 0) {
+        if raw.is_empty() {
+            continue;
+        }
+        let line = String::from_utf8_lossy(raw);
+        let (metadata, name) = line
+            .split_once('\t')
+            .ok_or_else(|| OriginError::Http(format!("invalid git tree line: {line}")))?;
+        let mut fields = metadata.split_whitespace();
+        let _mode = fields
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid git tree line: {line}")))?;
+        let kind = fields
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid git tree line: {line}")))?;
+        let oid = fields
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid git tree line: {line}")))?;
+        let size = fields
+            .next()
+            .ok_or_else(|| OriginError::Http(format!("invalid git tree line: {line}")))?;
+        if fields.next().is_some() || !is_git_oid(oid) || !is_git_tree_kind(kind) {
+            return Err(OriginError::Http(format!("invalid git tree line: {line}")));
+        }
+        let entry_path = if path.is_empty() {
+            name.to_string()
+        } else {
+            format!("{path}/{name}")
+        };
+        entries.push(ApiTreeEntry {
+            name: name.to_string(),
+            path: entry_path,
+            kind: kind.to_string(),
+            oid: oid.to_string(),
+            size: if size == "-" {
+                None
+            } else {
+                Some(size.parse().map_err(|error| {
+                    OriginError::Http(format!("invalid git tree size: {error}"))
+                })?)
+            },
+        });
+    }
+    entries.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .reverse()
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(entries)
+}
+
+fn read_git_blob(repo: &Path, reference: &str, path: &str) -> Result<String> {
+    validate_browser_ref(reference)?;
+    if path.is_empty() {
+        return Err(OriginError::UnsafePath(path.into()));
+    }
+    let output = git_bytes_output(repo, ["show", &git_treeish(reference, path)])?;
+    Ok(String::from_utf8_lossy(&output).into_owned())
+}
+
+fn git_treeish(reference: &str, path: &str) -> String {
+    if path.is_empty() {
+        reference.to_string()
+    } else {
+        format!("{reference}:{path}")
+    }
+}
+
+fn is_git_tree_kind(value: &str) -> bool {
+    matches!(value, "blob" | "commit" | "tag" | "tree")
+}
+
 fn capture_git_refs(repo: &Path) -> Result<Vec<GitRefEntry>> {
     let output = git_output(
         repo,
@@ -830,10 +1266,18 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
+    let output = git_bytes_output(repo, args)?;
+    Ok(String::from_utf8_lossy(&output).into_owned())
+}
+
+fn git_bytes_output<I, S>(repo: &Path, args: I) -> Result<Vec<u8>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     let mut all_args = vec!["-C".to_string(), path_str(repo)?.to_string()];
     all_args.extend(args.into_iter().map(|arg| arg.as_ref().to_string()));
-    let output = command_output("git", all_args)?;
-    Ok(String::from_utf8_lossy(&output).into_owned())
+    command_output("git", all_args)
 }
 
 fn command<I, S>(program: &str, args: I) -> Result<()>

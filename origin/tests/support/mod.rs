@@ -75,6 +75,15 @@ pub fn assert_container_cache_marker(service: &str, repo_name: &str) -> Result<(
 }
 
 pub fn http_status(address: &str, path: &str) -> Result<u16, Box<dyn Error>> {
+    Ok(http_get(address, path)?.status)
+}
+
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: String,
+}
+
+pub fn http_get(address: &str, path: &str) -> Result<HttpResponse, Box<dyn Error>> {
     let mut stream = TcpStream::connect(address)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     write!(
@@ -83,7 +92,14 @@ pub fn http_status(address: &str, path: &str) -> Result<u16, Box<dyn Error>> {
     )?;
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
-    parse_http_status(&response)
+    let status = parse_http_status(&response)?;
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .or_else(|| response.split_once("\n\n").map(|(_, body)| body))
+        .unwrap_or_default()
+        .to_string();
+    Ok(HttpResponse { status, body })
 }
 
 fn parse_http_status(response: &str) -> Result<u16, Box<dyn Error>> {
