@@ -8,6 +8,8 @@ use std::{
 };
 use tokio::net::TcpListener;
 
+static DOCKER_COMPOSE_ORIGIN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 #[ignore = "requires `make e2e-up`"]
 async fn git_push_survives_server_cache_loss_and_can_be_cloned() -> Result<(), Box<dyn Error>> {
@@ -137,6 +139,7 @@ async fn smart_http_server_accepts_push_and_serves_clone() -> Result<(), Box<dyn
 #[ignore = "requires `make e2e-up`"]
 async fn docker_compose_origin_service_accepts_push_and_serves_clone() -> Result<(), Box<dyn Error>>
 {
+    let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
     let temp = tempfile::tempdir()?;
     let client = temp.path().join("client");
     let clone = temp.path().join("clone");
@@ -157,7 +160,33 @@ async fn docker_compose_origin_service_accepts_push_and_serves_clone() -> Result
 
 #[tokio::test]
 #[ignore = "requires `make e2e-up`"]
+async fn docker_compose_origin_service_recovers_after_restart() -> Result<(), Box<dyn Error>> {
+    let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
+    let temp = tempfile::tempdir()?;
+    let client = temp.path().join("client");
+    let clone = temp.path().join("clone");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let remote_url = format!("http://127.0.0.1:9200/tenant/{repo_name}.git");
+
+    create_client_with_initial_commit(temp.path(), &client, &remote_url)?;
+    git(&client, ["push", "-u", "origin", "main"])?;
+
+    docker_compose(["restart", "origin"])?;
+    wait_for_remote(&remote_url)?;
+    git(temp.path(), ["clone", &remote_url, path_str(&clone)?])?;
+
+    assert_eq!(
+        std::fs::read_to_string(clone.join("README.md"))?,
+        "hello from origin\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires `make e2e-up`"]
 async fn docker_compose_origin_service_rejects_stale_push() -> Result<(), Box<dyn Error>> {
+    let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
     let temp = tempfile::tempdir()?;
     let first = temp.path().join("first");
     let second = temp.path().join("second");
@@ -188,6 +217,56 @@ async fn docker_compose_origin_service_rejects_stale_push() -> Result<(), Box<dy
     );
 
     Ok(())
+}
+
+fn wait_for_remote(remote_url: &str) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match git_result(Path::new("."), ["ls-remote", remote_url]) {
+            Ok(output) if output.status.success() => return Ok(()),
+            Ok(output) if Instant::now() >= deadline => {
+                return Err(format!(
+                    "origin did not become ready\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                )
+                .into());
+            }
+            Err(error) if Instant::now() >= deadline => {
+                return Err(format!("origin did not become ready: {error}").into());
+            }
+            _ => thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+fn docker_compose<I, S>(args: I) -> Result<(), Box<dyn Error>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let args = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_string())
+        .collect::<Vec<_>>();
+    let output = Command::new("docker")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("compose")
+        .args(&args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "docker compose {args:?} failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into())
+    }
 }
 
 fn git<I, S>(cwd: &Path, args: I) -> Result<(), Box<dyn Error>>
