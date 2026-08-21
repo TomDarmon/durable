@@ -396,6 +396,7 @@ async fn serve_http_with_cache_dir_and_guard(
         repositories: Mutex::new(HashMap::new()),
     });
     let app = axum::Router::new()
+        .route("/healthz", axum::routing::get(healthz))
         .route(
             "/{tenant}/{repo}/{*git_path}",
             axum::routing::get(git_http).post(git_http),
@@ -407,6 +408,10 @@ async fn serve_http_with_cache_dir_and_guard(
     )
     .await
     .map_err(|error| OriginError::Http(error.to_string()))
+}
+
+async fn healthz() -> axum::http::StatusCode {
+    axum::http::StatusCode::NO_CONTENT
 }
 
 struct HttpState {
@@ -458,6 +463,7 @@ async fn git_http(
         Err(error) => {
             let status = match error {
                 OriginError::UnsafePath(_) => axum::http::StatusCode::NOT_FOUND,
+                OriginError::Conflict => axum::http::StatusCode::CONFLICT,
                 _ => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             };
             (status, error.to_string()).into_response()

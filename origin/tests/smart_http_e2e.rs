@@ -2,8 +2,26 @@ mod support;
 
 use origin::{local_rustfs_config, serve_http};
 use std::error::Error;
-use support::{create_client_with_initial_commit, git, git_stdout, path_str, write_commit_push};
+use support::{
+    create_client_with_initial_commit, git, git_stdout, http_status, path_str, write_commit_push,
+};
 use tokio::net::TcpListener;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires `make e2e-up`"]
+async fn smart_http_health_endpoint_reports_ready() -> Result<(), Box<dyn Error>> {
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let (server, remote_url) = spawn_http_origin(&repo_name).await?;
+    let address = remote_url
+        .strip_prefix("http://")
+        .and_then(|url| url.split('/').next())
+        .ok_or("remote URL did not include an address")?;
+
+    assert_eq!(http_status(address, "/healthz")?, 204);
+
+    server.abort();
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires `make e2e-up`"]

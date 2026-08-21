@@ -3,9 +3,20 @@ mod support;
 use std::{error::Error, thread};
 use support::{
     assert_container_cache_marker, create_client_with_initial_commit, docker_compose, git,
-    git_output, git_result, git_stdout, path_str, wait_for_remote, write_commit, write_commit_push,
-    DOCKER_COMPOSE_ORIGIN_LOCK,
+    git_output, git_result, git_stdout, http_status, path_str, wait_for_remote, write_commit,
+    write_commit_push, DOCKER_COMPOSE_ORIGIN_LOCK,
 };
+
+#[tokio::test]
+#[ignore = "requires `make e2e-up`"]
+async fn docker_compose_origin_services_report_health() -> Result<(), Box<dyn Error>> {
+    let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
+
+    assert_eq!(http_status("127.0.0.1:9200", "/healthz")?, 204);
+    assert_eq!(http_status("127.0.0.1:9202", "/healthz")?, 204);
+
+    Ok(())
+}
 
 #[tokio::test]
 #[ignore = "requires `make e2e-up`"]
@@ -157,6 +168,16 @@ async fn docker_compose_origin_services_linearize_conflicting_pushes() -> Result
         String::from_utf8_lossy(&primary_output.stderr),
         String::from_utf8_lossy(&alternate_output.stdout),
         String::from_utf8_lossy(&alternate_output.stderr)
+    );
+    let losing_output = if primary_succeeded {
+        &alternate_output
+    } else {
+        &primary_output
+    };
+    let losing_stderr = String::from_utf8_lossy(&losing_output.stderr);
+    assert!(
+        losing_stderr.contains("409") || losing_stderr.contains("Conflict"),
+        "losing push should surface an HTTP conflict\nstderr:\n{losing_stderr}"
     );
 
     let expected_contents = if primary_succeeded {

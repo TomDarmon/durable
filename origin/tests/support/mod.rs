@@ -2,6 +2,8 @@
 
 use std::{
     error::Error,
+    io::{Read, Write},
+    net::TcpStream,
     path::Path,
     process::Command,
     thread,
@@ -70,6 +72,31 @@ pub fn assert_container_cache_marker(service: &str, repo_name: &str) -> Result<(
         "-s".to_string(),
         marker,
     ])
+}
+
+pub fn http_status(address: &str, path: &str) -> Result<u16, Box<dyn Error>> {
+    let mut stream = TcpStream::connect(address)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    parse_http_status(&response)
+}
+
+fn parse_http_status(response: &str) -> Result<u16, Box<dyn Error>> {
+    let status_line = response
+        .lines()
+        .next()
+        .ok_or("HTTP response did not include a status line")?;
+    let code = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| format!("HTTP status line had no code: {status_line}"))?
+        .parse()?;
+    Ok(code)
 }
 
 pub fn git<I, S>(cwd: &Path, args: I) -> Result<(), Box<dyn Error>>
