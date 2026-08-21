@@ -1,4 +1,4 @@
-.PHONY: check test integration-up integration-conformance integration-e2e integration-test integration-down clean-local
+.PHONY: check test integration-up integration-conformance integration-e2e integration-test integration-rustfs-persistence integration-down clean-local
 
 check:
 	$(MAKE) -C durable check
@@ -17,6 +17,9 @@ integration-e2e:
 
 integration-test:
 	$(MAKE) -C durable integration-test
+
+integration-rustfs-persistence:
+	$(MAKE) -C durable integration-rustfs-persistence
 
 integration-down:
 	$(MAKE) -C durable integration-down

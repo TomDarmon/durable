@@ -19,6 +19,7 @@ From the repository root:
 - `make integration-conformance`: run durable RustFS backend conformance tests.
 - `make integration-e2e`: run durable full-stack e2e tests over RustFS.
 - `make integration-test`: run both integration suites.
+- `make integration-rustfs-persistence`: optional local Docker volume smoke test.
 - `make integration-down`: stop local RustFS.
 - `make clean-local`: remove local RustFS volumes and durable build artifacts.
 

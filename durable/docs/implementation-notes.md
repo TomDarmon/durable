@@ -14,7 +14,10 @@
   disabled.
 - RustFS integration is split into backend conformance and full-stack e2e:
   conformance proves the S3/RustFS adapter contract, while e2e drives substrate,
-  cache, journal, queue, worker, and retention together over RustFS.
+  cache, journal, queue, worker, and retention together over RustFS using fresh
+  clients instead of backend restarts.
+- RustFS container restart is kept as an optional local persistence smoke test;
+  it is not treated as an S3 bucket semantics test.
 
 ## Deviations
 

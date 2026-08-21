@@ -14,10 +14,11 @@ backing store is real RustFS?"
 
 - `object_storage_cache.rs`: immutable object writes, verified full reads,
   range reads, memory cache refill, disk cache refill, cache deletion safety,
-  missing root reads, and object recovery after a RustFS restart.
+  missing root reads, and object visibility from a fresh storage client.
 - `worker_journal_root.rs`: queue delivery, worker execution, journal append,
   job acknowledgement, and root publication over RustFS.
-- `full_stack_restart.rs`: retention no-delete behavior, object storage, cache,
-  journal scan, root publication, and object recovery after a RustFS restart.
+- `full_stack_fresh_client.rs`: retention no-delete behavior, object storage,
+  cache, journal scan, root publication, and object/root visibility from a fresh
+  storage client.
 - `support/`: shared assertions and scenario plumbing. Test intent should stay
   in the top-level files; only reusable setup belongs here.

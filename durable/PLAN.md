@@ -109,7 +109,9 @@ Before relying on RustFS, create a minimal conformance probe and verify:
 - Rewriting identical logical bytes still produces a fresh logical `Revision`.
 - Exact-key reads are immediately able to observe a successful write.
 - Range reads return the correct bytes.
-- Data survives a RustFS container restart with a persistent volume.
+- Data written through one client is visible through a fresh backend client.
+- Local RustFS container restart preserves data only as a Docker volume smoke
+  test, not as an S3 bucket semantics claim.
 - A missing object, a precondition failure, and an unavailable backend are distinguishable.
 
 Use a root envelope containing a random logical revision/nonce. Do not expose the S3 ETag as the public `Revision`.
@@ -386,7 +388,9 @@ Implement focused tests for at least these scenarios:
 - Same logical root bytes still receive a fresh revision after publication.
 - Root commit succeeds but response is lost.
 - Root conflict returns the actual current root.
-- RustFS restart preserves objects and roots.
+- Fresh backend clients observe previously written objects and roots.
+- Optional local RustFS persistence smoke test preserves objects and roots across
+  a container restart.
 - Journal group commit batches concurrent appends.
 - Journal never exposes a partial batch.
 - Journal retry returns the original receipt.

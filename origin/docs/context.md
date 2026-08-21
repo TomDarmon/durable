@@ -38,7 +38,7 @@ by `../durable`.
 - Push one commit object and update one ref.
 - Reject stale ref update.
 - Treat lost root ACK as explicitly ambiguous and resolve by reading the root.
-- Fetch after RustFS restart.
+- Fetch after client/cache restart.
 - Cross-repository object/ref access is rejected.
 - Cache deletion does not lose repository data.
 

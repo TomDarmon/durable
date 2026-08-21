@@ -16,6 +16,7 @@ The library intentionally contains no Git, Origin, or vector-database semantics.
 - `make integration-conformance`: run the RustFS/S3 backend contract tests.
 - `make integration-e2e`: run the RustFS-backed library-composition tests.
 - `make integration-test`: run both backend conformance and e2e tests.
+- `make integration-rustfs-persistence`: optional local Docker volume smoke test.
 - `make integration-down`: stop the local stack.
 - `make clean-local`: stop the stack and remove local build/cache artifacts.
 
@@ -40,6 +41,11 @@ by digest for reproducible local validation.
 the library. `e2e` checks the durable library itself across real component
 boundaries: substrate, cache, journal, queue, worker, retention, and root
 publication.
+
+The normal integration suites model S3 behavior with fresh clients and
+authoritative reads. They do not restart the backing bucket. The optional
+RustFS persistence target restarts the local container only to check the Docker
+volume setup.
 
 ## Maturity
 

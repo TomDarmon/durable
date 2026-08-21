@@ -6,7 +6,6 @@ use cache::{
 use s3::{S3Backend, S3BackendConfig};
 use std::{
     path::PathBuf,
-    process::Command,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -44,27 +43,6 @@ pub async fn wait_for_rustfs() -> S3Backend {
             Err(error) => panic!("RustFS did not become ready: {error}"),
         }
     }
-}
-
-/// Returns the durable workspace root, where `docker-compose.yml` lives.
-pub fn durable_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("crate should be under durable/crates")
-        .to_path_buf()
-}
-
-/// Restarts RustFS through the local compose stack.
-pub fn restart_rustfs() {
-    let status = Command::new("docker")
-        .arg("compose")
-        .arg("--project-directory")
-        .arg(durable_root())
-        .args(["restart", "rustfs"])
-        .status()
-        .expect("failed to restart RustFS");
-    assert!(status.success());
 }
 
 /// Creates a fresh scope-bound RustFS storage handle.

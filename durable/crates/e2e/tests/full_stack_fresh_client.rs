@@ -1,9 +1,6 @@
 mod support;
 
-use e2e::{
-    cached_objects, fresh_storage, publish_until_visible, put_raw, restart_rustfs,
-    storage_for_scope,
-};
+use e2e::{cached_objects, fresh_storage, publish_until_visible, put_raw, storage_for_scope};
 use journal::{AppendRequest, Journal, JournalPosition, PagedJournal, StreamId};
 use retention::{RetentionEpochs, RetentionError};
 use std::{error::Error, sync::Arc};
@@ -13,7 +10,7 @@ use tempfile::TempDir;
 
 #[tokio::test]
 #[ignore = "requires local RustFS from `make integration-up`"]
-async fn composed_library_state_survives_rustfs_restart() -> Result<(), Box<dyn Error>> {
+async fn composed_library_state_is_visible_to_fresh_client() -> Result<(), Box<dyn Error>> {
     let storage = fresh_storage("full-stack").await;
     let scope = storage.scope().clone();
     let root = RootName::new("application-root");
@@ -45,22 +42,20 @@ async fn composed_library_state_survives_rustfs_restart() -> Result<(), Box<dyn 
     publish_until_visible(storage.as_ref(), &root, b"published".to_vec()).await?;
     retention.release(&epoch)?;
 
-    restart_rustfs();
-    let restarted_storage = storage_for_scope(scope).await;
-    let restarted_journal =
-        PagedJournal::new(journal.stream_id().clone(), restarted_storage.clone());
+    let reopened_storage = storage_for_scope(scope).await;
+    let reopened_journal = PagedJournal::new(journal.stream_id().clone(), reopened_storage.clone());
 
     assert_eq!(
-        restarted_journal
+        reopened_journal
             .scan_from(JournalPosition::FIRST)
             .await?
             .records
             .len(),
         1
     );
-    assert_root_value(restarted_storage.as_ref(), &root, b"published").await?;
+    assert_root_value(reopened_storage.as_ref(), &root, b"published").await?;
     assert_eq!(
-        ImmutableObjects::read(restarted_storage.as_ref(), &object_ref).await?,
+        ImmutableObjects::read(reopened_storage.as_ref(), &object_ref).await?,
         b"recover me"
     );
 

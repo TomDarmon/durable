@@ -1,11 +1,11 @@
-use e2e::{cached_objects, fresh_storage, put_raw, restart_rustfs, storage_for_scope};
+use e2e::{cached_objects, fresh_storage, put_raw, storage_for_scope};
 use std::error::Error;
 use substrate::{ImmutableObjects, RawRanges, RootName, RootRegister};
 use tempfile::TempDir;
 
 #[tokio::test]
 #[ignore = "requires local RustFS from `make integration-up`"]
-async fn immutable_objects_survive_cache_loss_and_rustfs_restart() -> Result<(), Box<dyn Error>> {
+async fn immutable_objects_survive_cache_loss_and_fresh_client() -> Result<(), Box<dyn Error>> {
     let storage = fresh_storage("object-cache").await;
     let scope = storage.scope().clone();
     let bytes = b"0123456789abcdef";
@@ -35,14 +35,13 @@ async fn immutable_objects_survive_cache_loss_and_rustfs_restart() -> Result<(),
         bytes
     );
 
-    restart_rustfs();
-    let restarted_storage = storage_for_scope(scope).await;
+    let reopened_storage = storage_for_scope(scope).await;
     assert_eq!(
-        ImmutableObjects::read(restarted_storage.as_ref(), &reference).await?,
+        ImmutableObjects::read(reopened_storage.as_ref(), &reference).await?,
         bytes
     );
     assert!(
-        RootRegister::read(restarted_storage.as_ref(), &RootName::new("unused-root"))
+        RootRegister::read(reopened_storage.as_ref(), &RootName::new("unused-root"))
             .await?
             .is_none()
     );
