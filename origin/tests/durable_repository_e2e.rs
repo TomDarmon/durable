@@ -20,6 +20,7 @@ async fn git_push_survives_server_cache_loss_and_can_be_cloned() -> Result<(), B
     git(temp.path(), ["init", path_str(&client)?])?;
     git(&client, ["config", "user.email", "agent@example.com"])?;
     git(&client, ["config", "user.name", "Agent"])?;
+    git(&client, ["config", "commit.gpgSign", "false"])?;
     std::fs::write(client.join("README.md"), "hello from origin\n")?;
     git(&client, ["add", "README.md"])?;
     git(&client, ["commit", "-m", "initial"])?;

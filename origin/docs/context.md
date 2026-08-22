@@ -17,30 +17,33 @@ by `../durable`.
 - Reader retention epochs with physical deletion disabled.
 - Deterministic fault injection for model and failure tests.
 
-## Origin V1 Candidate Boundaries
+## Origin V1 Boundaries
 
 - `RepositoryScope`: maps organization/user + repository + encryption domain to
   durable `StorageScope`.
-- `GitObjectStore`: validates Git object bytes, then writes them as durable
-  immutable objects with an Origin-specific `ObjectFormat::Custom`.
-- `RefStore`: stores refs as a small root value and publishes with durable CAS.
-- `PushTransaction`: validates expected refs, writes missing objects, then
-  publishes the new refs root. It must surface conflicts and outcome-unknown
-  states explicitly.
-- `FetchView`: reads a strong refs root, enters a retention epoch, and serves
-  referenced immutable objects through durable cache.
-- `MaintenanceQueue`: schedules pack/index/cache jobs through durable queue and
-  worker runtime. The queue is never authoritative.
+- `wal`: defines immutable push/compaction events, the WAL index, and stable
+  digests.
+- `git_cache`: owns local bare-repository creation, validation, Git CLI
+  helpers, pack inspection, and cache markers.
+- `OriginRepository`: appends durable WAL events, advances the WAL index root
+  with CAS, resolves unknown CAS outcomes by rereading the root/index, and
+  replays WAL state into disposable bare repos.
+- `FetchView`: materializes or verifies the local cache against the current WAL
+  index before serving `git-upload-pack`.
+- `Maintenance`: records compaction as WAL events. The queue is not
+  authoritative.
 
 ## First Tests To Write
 
-- Create repository scope and publish initial empty refs.
+- Create repository scope without publishing an empty authority record.
 - Push one commit object and update one ref.
 - Reject stale ref update.
 - Treat lost root ACK as explicitly ambiguous and resolve by reading the root.
 - Fetch after client/cache restart.
 - Cross-repository object/ref access is rejected.
 - Cache deletion does not lose repository data.
+- Corrupt local cache state is repaired from the WAL before reads.
+- A compaction WAL event can be replayed by a fresh cache.
 
 ## Important Constraints
 

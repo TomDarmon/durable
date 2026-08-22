@@ -128,6 +128,60 @@ async fn smart_http_fetch_sees_later_push() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires `make e2e-up`"]
+async fn second_http_service_serves_after_wal_catch_up() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let writer = temp.path().join("writer");
+    let clone = temp.path().join("clone");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let (primary, primary_url) = spawn_http_origin(&repo_name).await?;
+    let (secondary, secondary_url) = spawn_http_origin(&repo_name).await?;
+
+    create_client_with_initial_commit(temp.path(), &writer, &primary_url)?;
+    git(&writer, ["push", "-u", "origin", "main"])?;
+
+    let refs = git_stdout(temp.path(), ["ls-remote", &secondary_url])?;
+    assert!(
+        refs.contains("refs/heads/main"),
+        "secondary service did not catch up to the WAL:\n{refs}"
+    );
+    git(temp.path(), ["clone", &secondary_url, path_str(&clone)?])?;
+    assert_eq!(
+        std::fs::read_to_string(clone.join("README.md"))?,
+        "hello from origin\n"
+    );
+
+    primary.abort();
+    secondary.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires `make e2e-up`"]
+async fn smart_http_accepts_large_push() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let client = temp.path().join("client");
+    let clone = temp.path().join("clone");
+    let repo_name = format!("repo-{}", uuid::Uuid::new_v4());
+    let (server, remote_url) = spawn_http_origin(&repo_name).await?;
+
+    create_client_with_initial_commit(temp.path(), &client, &remote_url)?;
+    std::fs::write(client.join("large.bin"), vec![b'x'; 3 * 1024 * 1024])?;
+    git(&client, ["add", "large.bin"])?;
+    git(&client, ["commit", "-m", "large file"])?;
+    git(&client, ["push", "-u", "origin", "main"])?;
+    git(temp.path(), ["clone", &remote_url, path_str(&clone)?])?;
+
+    assert_eq!(
+        std::fs::metadata(clone.join("large.bin"))?.len(),
+        3 * 1024 * 1024
+    );
+
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires `make e2e-up`"]
 async fn smart_http_clone_preserves_branches_and_tags() -> Result<(), Box<dyn Error>> {
     let temp = tempfile::tempdir()?;
     let client = temp.path().join("client");

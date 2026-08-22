@@ -4,13 +4,13 @@
 agents. It is built on top of the reusable substrate in `../durable`.
 
 The current v1 stores the authoritative state of a bare Git serving repository
-as immutable durable objects plus a small durable root. Local bare repositories
-are rebuildable serving caches: real `git push` can write to one, Origin
-publishes the resulting files to durable storage, and a fresh server cache can
-be materialized later for `git clone`/fetch.
-Each published root points at an Origin manifest containing the captured refs,
-Git object catalog metadata, and the durable file objects needed to rebuild the
-serving cache.
+as an append-only WAL in S3-compatible durable storage. Each accepted push is
+captured as an immutable WAL entry before Origin acknowledges it, and the small
+durable root is advanced with compare-and-swap to point at the new WAL index.
+Local bare repositories are rebuildable serving caches: real Git operations run
+against normal bare repositories on disk, but fetch/clone first confirm that the
+cache has caught up to the current WAL index. A missing or corrupt cache is
+materialized again by replaying the WAL.
 
 ## Commands
 
@@ -66,19 +66,18 @@ ORIGIN_RUST_LOG=origin=debug ORIGIN_UI_API_RUST_LOG=origin=debug,origin_ui_api=i
 
 The e2e tests are split by layer:
 
-- `tests/durable_repository_e2e.rs`: durable publication/materialization without HTTP.
-- `tests/smart_http_e2e.rs`: in-process Smart HTTP behavior with real Git clients, plus browser API reads from data published through Smart HTTP.
+- `tests/durable_repository_e2e.rs`: durable WAL replay/materialization without HTTP.
+- `tests/smart_http_e2e.rs`: in-process Smart HTTP behavior with real Git clients, plus browser API reads and cross-service WAL catch-up from data published through Smart HTTP.
 - `tests/docker_compose_e2e.rs`: Docker/RustFS service behavior, browser/UI API smoke, restarts, cache, and multi-service conflicts.
 
-## Intended V1 Shape
+## Current V1 Shape
 
-- Store materialized Git server files as verified immutable durable objects.
-- Publish refs and Git object metadata in an Origin-owned manifest.
-- Publish repository state through durable root compare-and-swap.
+- Store immutable WAL entries and Git pack objects in durable storage.
+- Publish repository visibility through a durable WAL index root compare-and-swap.
+- Resolve ambiguous root-CAS acknowledgements by rereading the durable WAL index.
 - Use durable scopes to isolate tenants, repositories, and encryption domains.
 - Treat local bare repositories as discardable serving caches.
-- Use durable queue and worker runtime for asynchronous maintenance jobs.
-- Use durable journal only where Origin needs an ordered admission log.
+- Model compaction as a durable WAL event replayable by a fresh cache.
 - Keep safe retention/no-delete behavior until a correct GC protocol exists.
 
 ## Non-Goals For The First Origin Build

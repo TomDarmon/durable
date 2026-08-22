@@ -63,7 +63,7 @@ where
 }
 
 pub fn assert_container_cache_marker(service: &str, repo_name: &str) -> Result<(), Box<dyn Error>> {
-    let marker = format!("/var/lib/origin/cache/tenant/{repo_name}.git/.origin-cache-publication");
+    let marker = format!("/var/lib/origin/cache/tenant/{repo_name}.git/.origin-cache-wal");
     docker_compose(vec![
         "exec".to_string(),
         "-T".to_string(),

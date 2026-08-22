@@ -122,6 +122,7 @@ async fn docker_compose_origin_service_rejects_stale_push() -> Result<(), Box<dy
     git(temp.path(), ["clone", &remote_url, path_str(&second)?])?;
     git(&second, ["config", "user.email", "agent@example.com"])?;
     git(&second, ["config", "user.name", "Agent"])?;
+    git(&second, ["config", "commit.gpgSign", "false"])?;
 
     write_commit_push(&first, "README.md", "winner\n", "winning update")?;
     write_commit(&second, "README.md", "stale loser\n", "stale update")?;
@@ -164,6 +165,7 @@ async fn docker_compose_origin_services_linearize_conflicting_pushes() -> Result
     git(temp.path(), ["clone", &primary_url, path_str(&alternate)?])?;
     git(&alternate, ["config", "user.email", "agent@example.com"])?;
     git(&alternate, ["config", "user.name", "Agent"])?;
+    git(&alternate, ["config", "commit.gpgSign", "false"])?;
     git(&alternate, ["remote", "set-url", "origin", &alternate_url])?;
 
     write_commit(&primary, "README.md", "primary winner\n", "primary update")?;
