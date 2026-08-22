@@ -4,9 +4,16 @@ import {
   backendErrorStatus,
   backendJson,
   type BlobResponse,
+  gitAuthHint,
+  gatewayJson,
   type RefsResponse,
-  type RepositoriesResponse,
+  repositoryListJson,
   repositoryPath,
+  publicGitBaseUrl,
+  serviceReady,
+  type GatewayStatus,
+  type ServiceHealth,
+  type SystemOverview,
   type TreeResponse,
 } from "./originBackend";
 
@@ -45,9 +52,46 @@ async function fromBackend<T>(call: () => Promise<T>): Promise<T> {
 }
 
 export const appRouter = t.router({
+  system: t.router({
+    overview: t.procedure.query(async (): Promise<SystemOverview> => {
+      const gateway = await gatewayJson<GatewayStatus>("/readyz").catch(() => null);
+      const originReady = await serviceReady("/healthz");
+      const gatewayReady = gateway?.ready === true;
+      const services: ServiceHealth[] = [
+        {
+          name: "gateway",
+          label: "Gateway",
+          status: gatewayReady ? "ready" : "degraded",
+          detail: gatewayReady
+            ? `${gateway.backends.length} Origin backend${gateway.backends.length === 1 ? "" : "s"} ready`
+            : "Git ingress is not ready",
+        },
+        {
+          name: "webapp",
+          label: "Webapp backend",
+          status: "ready",
+          detail: "Next.js/tRPC facade is serving this interface",
+        },
+        {
+          name: "origin",
+          label: "Origin API / engine",
+          status: originReady ? "ready" : "degraded",
+          detail: originReady
+            ? "Repository metadata API is reachable"
+            : "Repository metadata API is not reachable",
+        },
+      ];
+      return {
+        services,
+        gateway,
+        cloneBaseUrl: publicGitBaseUrl(),
+        gitAuthHint: gitAuthHint(),
+      };
+    }),
+  }),
   repositories: t.router({
     list: t.procedure.query(() =>
-      fromBackend(() => backendJson<RepositoriesResponse>("/api/repos")),
+      fromBackend(() => repositoryListJson()),
     ),
     refs: t.procedure.input(repositoryInput).query(({ input }) =>
       fromBackend(() =>

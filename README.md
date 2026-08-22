@@ -3,11 +3,13 @@
 This repository is organized for two layers:
 
 - `durable/`: reusable Rust durable-storage substrate.
-- `origin/`: future Origin-like application layer built on top of `durable`.
+- `origin/`: Origin Git engine built on top of `durable`.
+- `gateway/`: Python API gateway in front of Origin.
 
-The durable library is implemented and tested first. Origin is intentionally only
-context and planning material right now; implementation should start in a new
-goal.
+Origin owns Git smart HTTP, WAL publication, cache materialization, and durable
+storage correctness. The Python gateway owns externally-facing API concerns:
+auth, tenant/repository policy, rate limits, validation, audit logs, metrics,
+and control-plane error shape.
 
 ## Commands
 
@@ -25,6 +27,14 @@ From the repository root:
 - `make origin-e2e-up`: start Origin's local RustFS stack.
 - `make origin-e2e-test`: run Origin real-git e2e tests.
 - `make origin-e2e-down`: stop Origin's local RustFS stack.
+- `make gateway-install`: install the Python gateway and development tools.
+- `make gateway-format-check`: check Python formatting.
+- `make gateway-lint`: run Ruff on the gateway.
+- `make gateway-typecheck`: run mypy on the gateway.
+- `make gateway-test`: run gateway unit and fake-backend integration tests.
+- `make gateway-e2e`: run real Git CLI e2e tests through the gateway against
+  Origin/RustFS.
+- `make gateway-dev`: run the gateway development server.
 - `make clean-local`: remove local RustFS volumes and durable build artifacts.
 
 Normal tests do not require RustFS. RustFS-backed tests are ignored in the normal

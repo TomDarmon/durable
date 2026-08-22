@@ -20,13 +20,21 @@ materialized again by replaying the WAL.
 - `make e2e-test`: run ignored real-git e2e tests over RustFS.
 - `make e2e-down`: stop the local stack.
 
-The compose stack exposes Git HTTP servers at `http://127.0.0.1:9200` and
-`http://127.0.0.1:9202`, a read-only browser API at
-`http://127.0.0.1:9210`, and a Next.js/tRPC repository browser at
-`http://127.0.0.1:9300`. The Git services share the same RustFS bucket and keep
-discardable local bare-repository caches under `/var/lib/origin/cache`. The
-browser API has its own discardable cache under `/var/lib/origin-ui-api/cache`.
-Each service exposes `GET /healthz`, returning `204 No Content` when ready.
+The compose stack exposes Git HTTP engine instances at `http://127.0.0.1:9200`
+and `http://127.0.0.1:9202`, the Python gateway at
+`http://127.0.0.1:9400`, a read-only Origin metadata API at
+`http://127.0.0.1:9210`, and a Next.js/tRPC webapp at
+`http://127.0.0.1:9300`. The Git engine services share the same RustFS bucket
+and keep discardable local bare-repository caches under `/var/lib/origin/cache`.
+The metadata API has its own discardable cache under
+`/var/lib/origin-ui-api/cache`. Each service exposes `GET /healthz`, returning
+`204 No Content` when ready.
+
+The webapp is intentionally a raw GitHub-like shell rather than a product suite:
+it lists repositories, shows clone URLs that route through the gateway, browses
+branches/refs/files, and displays gateway/webapp/Origin status. Push and clone
+still go through the gateway; Origin still owns Git smart HTTP, WAL, and cache
+correctness.
 
 ## Logs
 
@@ -54,6 +62,12 @@ Follow the Next.js/tRPC app with:
 
 ```sh
 docker compose -f origin/docker-compose.yml logs -f origin-ui
+```
+
+Follow the Python gateway with:
+
+```sh
+docker compose -f origin/docker-compose.yml logs -f origin-gateway
 ```
 
 The default Git server filter is `origin=info,origin_server=info`; the default

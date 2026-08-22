@@ -15,9 +15,9 @@ use catalog::{CATALOG_DATASET, CATALOG_ENCRYPTION_DOMAIN, CATALOG_TENANT};
 use git_cache::command;
 use git_cache::{
     cache_marker_matches, capture_git_objects, capture_git_refs, command_output,
-    command_output_with_input, git, git_bytes_output, is_git_oid, materialize_empty_bare_repo,
-    pack_index_locations, path_str, safe_join, validate_path_segment, validate_repository_name,
-    write_cache_marker, write_loose_refs,
+    command_output_with_input, git, git_bytes_output, git_output, is_git_oid,
+    materialize_empty_bare_repo, pack_index_locations, path_str, safe_join, validate_path_segment,
+    validate_repository_name, write_cache_marker, write_loose_refs,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -46,6 +46,8 @@ pub use wal::{
     GitPushWalEntry, GitRefEntry, GitWalEvent, GitWalEventKind, GitWalIndex, GitWalIndexEntry,
     PublicationResolution,
 };
+
+const BROWSER_BLOB_LIMIT_BYTES: u64 = 1024 * 1024;
 
 /// Origin result type.
 pub type Result<T> = std::result::Result<T, OriginError>;
@@ -1632,8 +1634,25 @@ fn read_git_blob(repo: &Path, reference: &str, path: &str) -> Result<String> {
     if path.is_empty() {
         return Err(OriginError::UnsafePath(path.into()));
     }
-    let output = git_bytes_output(repo, ["show", &git_treeish(reference, path)])?;
-    Ok(String::from_utf8_lossy(&output).into_owned())
+    let treeish = git_treeish(reference, path);
+    let kind = git_output(repo, ["cat-file", "-t", &treeish])?;
+    if kind.trim() != "blob" {
+        return Err(OriginError::Http(format!("path is not a blob: {path}")));
+    }
+    let size = git_output(repo, ["cat-file", "-s", &treeish])?
+        .trim()
+        .parse::<u64>()
+        .map_err(|error| OriginError::Http(format!("invalid git blob size: {error}")))?;
+    if size > BROWSER_BLOB_LIMIT_BYTES {
+        return Err(OriginError::Http(format!(
+            "blob exceeds browser API limit of {BROWSER_BLOB_LIMIT_BYTES} bytes"
+        )));
+    }
+    let output = git_bytes_output(repo, ["show", &treeish])?;
+    if output.contains(&0) {
+        return Err(OriginError::Http("binary blob cannot be displayed".into()));
+    }
+    String::from_utf8(output).map_err(|error| OriginError::Http(error.to_string()))
 }
 
 fn git_treeish(reference: &str, path: &str) -> String {
@@ -2156,6 +2175,44 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn browser_blob_reader_rejects_binary_content() {
+        let (temp, repo) = browser_test_repository("binary.bin", b"text\0binary");
+        let error = read_git_blob(&repo, "HEAD", "binary.bin").unwrap_err();
+
+        assert!(
+            matches!(error, OriginError::Http(ref message) if message.contains("binary blob")),
+            "unexpected error: {error}"
+        );
+        drop(temp);
+    }
+
+    #[test]
+    fn browser_blob_reader_rejects_large_content() {
+        let content = vec![b'x'; BROWSER_BLOB_LIMIT_BYTES as usize + 1];
+        let (temp, repo) = browser_test_repository("large.txt", &content);
+        let error = read_git_blob(&repo, "HEAD", "large.txt").unwrap_err();
+
+        assert!(
+            matches!(error, OriginError::Http(ref message) if message.contains("browser API limit")),
+            "unexpected error: {error}"
+        );
+        drop(temp);
+    }
+
+    fn browser_test_repository(file_name: &str, content: &[u8]) -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        command("git", ["init", path_str(&repo).unwrap()]).unwrap();
+        git(&repo, ["config", "user.email", "agent@example.com"]).unwrap();
+        git(&repo, ["config", "user.name", "Agent"]).unwrap();
+        git(&repo, ["config", "commit.gpgSign", "false"]).unwrap();
+        fs::write(repo.join(file_name), content).unwrap();
+        git(&repo, ["add", file_name]).unwrap();
+        git(&repo, ["commit", "-m", "test"]).unwrap();
+        (temp, repo)
     }
 
     fn test_scope(name: &str) -> StorageScope {

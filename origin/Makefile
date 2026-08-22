@@ -19,7 +19,7 @@ bench-incremental:
 	cargo test --test incremental_publication_benchmark -- --ignored --nocapture
 
 e2e-up:
-	docker compose up --build -d rustfs rustfs-init origin origin-alt origin-ui-api origin-ui
+	docker compose up --build -d rustfs rustfs-init origin origin-alt origin-ui-api origin-ui origin-gateway
 
 e2e-test:
 	DURABLE_RUSTFS_ENDPOINT=$(RUSTFS_ENDPOINT) \

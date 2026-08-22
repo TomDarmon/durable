@@ -89,14 +89,40 @@ services:
     ports:
       - "9210:9210"
 
+  origin-gateway:
+    build:
+      context: ..
+      dockerfile: gateway/Dockerfile
+    depends_on:
+      - origin
+      - origin-alt
+      - origin-ui-api
+    environment:
+      ORIGIN_GATEWAY_BIND_HOST: 0.0.0.0
+      ORIGIN_GATEWAY_BIND_PORT: 9400
+      ORIGIN_GATEWAY_ENVIRONMENT: development
+      ORIGIN_GATEWAY_ORIGIN_BACKENDS: '["http://origin:9200","http://origin-alt:9200"]'
+      ORIGIN_GATEWAY_CONTROL_BACKEND_URL: http://origin-ui-api:9210
+      ORIGIN_GATEWAY_DEV_AUTH_TOKEN: ${ORIGIN_GATEWAY_DEV_AUTH_TOKEN:-local-dev-token-123456}
+      ORIGIN_GATEWAY_DEV_AUTH_ACTOR: ${ORIGIN_GATEWAY_DEV_AUTH_ACTOR:-local-dev}
+      ORIGIN_GATEWAY_DEV_AUTH_TENANTS: '["tenant"]'
+      ORIGIN_GATEWAY_LOG_LEVEL: ${ORIGIN_GATEWAY_LOG_LEVEL:-INFO}
+    ports:
+      - "9400:9400"
+
   origin-ui:
     build:
       context: browser
       dockerfile: Dockerfile
     depends_on:
       - origin-ui-api
+      - origin-gateway
     environment:
       ORIGIN_UI_BACKEND_URL: http://origin-ui-api:9210
+      ORIGIN_GATEWAY_URL: http://origin-gateway:9400
+      ORIGIN_GATEWAY_ADMIN_TOKEN: ${ORIGIN_GATEWAY_DEV_AUTH_TOKEN:-local-dev-token-123456}
+      ORIGIN_WEBAPP_PUBLIC_GIT_BASE_URL: http://127.0.0.1:9400
+      ORIGIN_WEBAPP_GIT_AUTH_HINT: Use a gateway token as your Git password.
     ports:
       - "9300:9300"
 

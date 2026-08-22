@@ -36,6 +36,30 @@ export type BlobResponse = {
   content: string;
 };
 
+export type ServiceHealth = {
+  name: "gateway" | "webapp" | "origin";
+  label: string;
+  status: "ready" | "degraded";
+  detail: string;
+};
+
+export type GatewayBackend = {
+  url: string;
+  status: string;
+};
+
+export type GatewayStatus = {
+  ready: boolean;
+  backends: GatewayBackend[];
+};
+
+export type SystemOverview = {
+  services: ServiceHealth[];
+  gateway: GatewayStatus | null;
+  cloneBaseUrl: string;
+  gitAuthHint: string;
+};
+
 class OriginBackendError extends Error {
   status: number;
 
@@ -48,6 +72,19 @@ class OriginBackendError extends Error {
 
 const backendBaseUrl = (): string =>
   (process.env.ORIGIN_UI_BACKEND_URL || "http://127.0.0.1:9210").replace(/\/$/, "");
+
+const gatewayBaseUrl = (): string =>
+  (process.env.ORIGIN_GATEWAY_URL || "http://127.0.0.1:9400").replace(/\/$/, "");
+
+export const publicGitBaseUrl = (): string =>
+  (
+    process.env.ORIGIN_WEBAPP_PUBLIC_GIT_BASE_URL ||
+    process.env.ORIGIN_GATEWAY_PUBLIC_URL ||
+    gatewayBaseUrl()
+  ).replace(/\/$/, "");
+
+export const gitAuthHint = (): string =>
+  process.env.ORIGIN_WEBAPP_GIT_AUTH_HINT || "Use a gateway token as your Git password.";
 
 export async function backendJson<T>(path: string): Promise<T> {
   const response = await fetch(`${backendBaseUrl()}${path}`, {
@@ -64,6 +101,43 @@ export async function backendJson<T>(path: string): Promise<T> {
     );
   }
   return response.json();
+}
+
+export async function gatewayJson<T>(path: string): Promise<T> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+  };
+  if (process.env.ORIGIN_GATEWAY_ADMIN_TOKEN) {
+    headers.authorization = `Bearer ${process.env.ORIGIN_GATEWAY_ADMIN_TOKEN}`;
+  }
+  const response = await fetch(`${gatewayBaseUrl()}${path}`, {
+    headers,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new OriginBackendError(
+      response.status,
+      message || `Origin gateway returned HTTP ${response.status}`,
+    );
+  }
+  return response.json();
+}
+
+export async function repositoryListJson(): Promise<RepositoriesResponse> {
+  if (process.env.ORIGIN_GATEWAY_ADMIN_TOKEN) {
+    return gatewayJson<RepositoriesResponse>("/admin/repos");
+  }
+  return backendJson<RepositoriesResponse>("/api/repos");
+}
+
+export async function serviceReady(path: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${backendBaseUrl()}${path}`, { cache: "no-store" });
+    return response.ok || response.status === 204;
+  } catch {
+    return false;
+  }
 }
 
 export function backendErrorStatus(error: unknown): number | undefined {

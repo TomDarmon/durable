@@ -2,3 +2,10 @@ target/
 .DS_Store
 node_modules/
 .next/
+.venv/
+gateway/.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/

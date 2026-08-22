@@ -33,6 +33,29 @@ pub fn wait_for_remote(remote_url: &str) -> Result<(), Box<dyn Error>> {
     }
 }
 
+pub fn wait_for_http_status(
+    address: &str,
+    path: &str,
+    expected: u16,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match http_status(address, path) {
+            Ok(status) if status == expected => return Ok(()),
+            Ok(status) if Instant::now() >= deadline => {
+                return Err(format!(
+                    "HTTP {address}{path} did not become ready: last status {status}"
+                )
+                .into());
+            }
+            Err(error) if Instant::now() >= deadline => {
+                return Err(format!("HTTP {address}{path} did not become ready: {error}").into());
+            }
+            _ => thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
 pub fn docker_compose<I, S>(args: I) -> Result<(), Box<dyn Error>>
 where
     I: IntoIterator<Item = S>,

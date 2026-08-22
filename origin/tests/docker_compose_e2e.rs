@@ -3,8 +3,8 @@ mod support;
 use std::{error::Error, thread};
 use support::{
     assert_container_cache_marker, create_client_with_initial_commit, docker_compose, git,
-    git_output, git_result, git_stdout, http_get, http_status, path_str, wait_for_remote,
-    write_commit, write_commit_push, DOCKER_COMPOSE_ORIGIN_LOCK,
+    git_output, git_result, git_stdout, http_get, http_status, path_str, wait_for_http_status,
+    wait_for_remote, write_commit, write_commit_push, DOCKER_COMPOSE_ORIGIN_LOCK,
 };
 
 #[tokio::test]
@@ -12,9 +12,14 @@ use support::{
 async fn docker_compose_origin_services_report_health() -> Result<(), Box<dyn Error>> {
     let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
 
+    wait_for_http_status("127.0.0.1:9200", "/healthz", 204)?;
+    wait_for_http_status("127.0.0.1:9202", "/healthz", 204)?;
+    wait_for_http_status("127.0.0.1:9210", "/healthz", 204)?;
+    wait_for_http_status("127.0.0.1:9400", "/readyz", 200)?;
     assert_eq!(http_status("127.0.0.1:9200", "/healthz")?, 204);
     assert_eq!(http_status("127.0.0.1:9202", "/healthz")?, 204);
     assert_eq!(http_status("127.0.0.1:9210", "/healthz")?, 204);
+    assert_eq!(http_status("127.0.0.1:9400", "/healthz")?, 204);
 
     Ok(())
 }
@@ -24,7 +29,20 @@ async fn docker_compose_origin_services_report_health() -> Result<(), Box<dyn Er
 async fn docker_compose_origin_browser_serves_react_app() -> Result<(), Box<dyn Error>> {
     let _docker_origin = DOCKER_COMPOSE_ORIGIN_LOCK.lock().await;
 
+    wait_for_http_status("127.0.0.1:9300", "/", 200)?;
+    wait_for_http_status("127.0.0.1:9400", "/readyz", 200)?;
     assert_eq!(http_status("127.0.0.1:9300", "/")?, 200);
+    let response = http_get(
+        "127.0.0.1:9300",
+        "/api/trpc/system.overview?input=%7B%22json%22%3Anull%7D",
+    )?;
+    assert_eq!(response.status, 200, "unexpected body: {}", response.body);
+    let payload: serde_json::Value = serde_json::from_str(&response.body)?;
+    assert_eq!(payload["result"]["data"]["gateway"]["ready"], true);
+    assert_eq!(
+        payload["result"]["data"]["cloneBaseUrl"],
+        "http://127.0.0.1:9400"
+    );
 
     Ok(())
 }
